@@ -1,0 +1,15 @@
+# ESP-IDF / ESP-ADF build output
+/build/
+/managed_components/
+sdkconfig.old
+*.log
+
+# Python virtual environment
+/.venv/
+*.pyc
+__pycache__/
+
+# IDE / Editor
+/.vscode/
+*.swp
+*.~*
