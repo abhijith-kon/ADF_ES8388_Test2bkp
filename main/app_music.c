@@ -3,6 +3,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include <string.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include "esp_log.h"
@@ -247,6 +248,25 @@ static void sd_card_scan_task(void *arg)
     vTaskDelete(NULL);
 }
 
+static int decoder_write_cb(audio_element_handle_t el, char *buffer, int len, TickType_t ticks_to_wait, void *ctx)
+{
+    if (fft_ringbuf && len > 0) {
+        int avail_fill = rb_bytes_filled(fft_ringbuf);
+        if (avail_fill + len > 4000) {
+            char dummy[512];
+            while (rb_bytes_filled(fft_ringbuf) + len > 4000) {
+                if (rb_read(fft_ringbuf, dummy, sizeof(dummy), 0) <= 0) break;
+            }
+        }
+        rb_write(fft_ringbuf, buffer, len, 0);
+    }
+    ringbuf_handle_t out_rb = (ringbuf_handle_t)ctx;
+    if (out_rb) {
+        return rb_write(out_rb, buffer, len, ticks_to_wait);
+    }
+    return len;
+}
+
 // ---- Audio Pipeline Init ----
 static void init_audio_pipeline(void)
 {
@@ -264,14 +284,10 @@ static void init_audio_pipeline(void)
     i2s_cfg.out_rb_size = 32 * 1024;
     i2s_cfg.chan_cfg.dma_desc_num = 6;
     i2s_cfg.chan_cfg.dma_frame_num = 480;
-    i2s_cfg.multi_out_num = 1;
     i2s_stream_writer = i2s_stream_init(&i2s_cfg);
 
     if (!fft_ringbuf) {
         fft_ringbuf = rb_create(4096, 1);
-    }
-    if (fft_ringbuf) {
-        audio_element_set_multi_output_ringbuf(i2s_stream_writer, fft_ringbuf, 0);
     }
 
     audio_decoder_t auto_decode[] = {
@@ -290,6 +306,12 @@ static void init_audio_pipeline(void)
 
     const char *link_tag[3] = {"file", "dec", "i2s"};
     audio_pipeline_link(pipeline, &link_tag[0], 3);
+
+    ringbuf_handle_t dec_out_rb = audio_element_get_output_ringbuf(mp3_decoder);
+    if (dec_out_rb) {
+        audio_element_set_write_cb(mp3_decoder, decoder_write_cb, (void *)dec_out_rb);
+        ESP_LOGI(TAG, "Attached write callback after decoder to tap real PCM audio for FFT visualizer.");
+    }
 
     audio_event_iface_cfg_t evt_cfg = AUDIO_EVENT_IFACE_DEFAULT_CFG();
     evt = audio_event_iface_init(&evt_cfg);
@@ -638,7 +660,11 @@ static void draw_player_visualizer(void)
     bool have_real_audio = false;
 
     if (is_playing && fft_ringbuf) {
+        static int log_cnt = 0;
         int avail = rb_bytes_available(fft_ringbuf);
+        if (++log_cnt % 50 == 1) {
+            ESP_LOGI(TAG, "FFT rb avail = %d, filled = %d", avail, rb_bytes_filled(fft_ringbuf));
+        }
         if (avail > 0) {
             if (avail > (int)sizeof(pcm_read_buf)) avail = (int)sizeof(pcm_read_buf);
             int bytes_read = rb_read(fft_ringbuf, (char*)pcm_read_buf, avail, 0);
@@ -894,68 +920,49 @@ static void play_track(int index)
                 if (buf) {
                     fseek(f, 10, SEEK_SET);
                     size_t got = fread(buf, 1, scan_len, f);
-                    for (size_t i = 0; i + 3 < got; i++) {
-                        if (buf[i]=='A' && buf[i+1]=='P' && buf[i+2]=='I' && buf[i+3]=='C') {
+                    size_t idx = 0;
+                    if ((hdr[5] & 0x40) && got >= 4) {
+                        uint32_t ext_size = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
+                        if (hdr[3] == 4) {
+                            ext_size = ((uint32_t)(buf[0] & 0x7F) << 21) | ((uint32_t)(buf[1] & 0x7F) << 14) | ((uint32_t)(buf[2] & 0x7F) << 7) | (uint32_t)(buf[3] & 0x7F);
+                        }
+                        if (ext_size + 4 <= got) idx += ext_size;
+                    }
+                    while (idx + 10 <= got && idx < id3_size) {
+                        char id[5] = { (char)buf[idx], (char)buf[idx+1], (char)buf[idx+2], (char)buf[idx+3], '\0' };
+                        if (id[0] == 0 || !isalnum((unsigned char)id[0])) break;
+                        uint32_t f_size = ((uint32_t)buf[idx+4] << 24) | ((uint32_t)buf[idx+5] << 16) | ((uint32_t)buf[idx+6] << 8) | buf[idx+7];
+                        if (hdr[3] == 4) {
+                            f_size = ((uint32_t)(buf[idx+4] & 0x7F) << 21) | ((uint32_t)(buf[idx+5] & 0x7F) << 14) | ((uint32_t)(buf[idx+6] & 0x7F) << 7) | (uint32_t)(buf[idx+7] & 0x7F);
+                        }
+                        if (f_size == 0 || idx + 10 + f_size > got) break;
+
+                        if (strcmp(id, "APIC") == 0) {
                             has_apic = true;
+                        } else if ((strcmp(id, "TPE1") == 0 || strcmp(id, "TIT2") == 0) && f_size > 1 && f_size < 128) {
+                            uint8_t enc = buf[idx + 10];
+                            char *dest = (strcmp(id, "TPE1") == 0) ? info_artist_str : info_title_str;
+                            int max_len = (strcmp(id, "TPE1") == 0) ? 60 : 120;
+                            int out_idx = 0;
+                            if (enc == 0 || enc == 3) {
+                                for (uint32_t k = 1; k < f_size && out_idx < max_len; k++) {
+                                    char c = (char)buf[idx + 10 + k];
+                                    if (c == '\0') break;
+                                    if ((unsigned char)c >= 32) dest[out_idx++] = c;
+                                }
+                            } else if (enc == 1 || enc == 2) {
+                                uint32_t start_k = (enc == 1 && f_size >= 3) ? 3 : 1;
+                                for (uint32_t k = start_k; k + 1 < f_size && out_idx < max_len; k += 2) {
+                                    char c = (char)buf[idx + 10 + (enc == 2 ? k + 1 : k)];
+                                    if (c == '\0' && buf[idx + 10 + k + 1] == '\0') break;
+                                    if ((unsigned char)c >= 32 && buf[idx + 10 + (enc == 2 ? k : k + 1)] == 0) {
+                                        dest[out_idx++] = c;
+                                    }
+                                }
+                            }
+                            if (out_idx > 0) dest[out_idx] = '\0';
                         }
-                        if (buf[i]=='T' && buf[i+1]=='P' && buf[i+2]=='E' && buf[i+3]=='1' && i + 11 < got) {
-                            uint32_t f_size = ((uint32_t)buf[i+4] << 24) | ((uint32_t)buf[i+5] << 16) | ((uint32_t)buf[i+6] << 8) | buf[i+7];
-                            if (hdr[3] == 4) {
-                                f_size = ((uint32_t)(buf[i+4] & 0x7F) << 21) | ((uint32_t)(buf[i+5] & 0x7F) << 14) | ((uint32_t)(buf[i+6] & 0x7F) << 7) | (uint32_t)(buf[i+7] & 0x7F);
-                            }
-                            if (f_size > 1 && i + 10 + f_size <= got && f_size < 128) {
-                                uint8_t enc = buf[i+10];
-                                int out_idx = 0;
-                                if (enc == 0 || enc == 3) {
-                                    for (uint32_t k = 1; k < f_size && out_idx < 60; k++) {
-                                        char c = (char)buf[i + 10 + k];
-                                        if (c == '\0') break;
-                                        if ((unsigned char)c >= 32) info_artist_str[out_idx++] = c;
-                                    }
-                                } else if (enc == 1 || enc == 2) {
-                                    uint32_t start_k = (enc == 1 && f_size >= 3) ? 3 : 1;
-                                    for (uint32_t k = start_k; k + 1 < f_size && out_idx < 60; k += 2) {
-                                        char c = (char)buf[i + 10 + (enc == 2 ? k + 1 : k)];
-                                        if (c == '\0' && buf[i + 10 + k + 1] == '\0') break;
-                                        if ((unsigned char)c >= 32 && buf[i + 10 + (enc == 2 ? k : k + 1)] == 0) {
-                                            info_artist_str[out_idx++] = c;
-                                        }
-                                    }
-                                }
-                                if (out_idx > 0) {
-                                    info_artist_str[out_idx] = '\0';
-                                }
-                            }
-                        }
-                        if (buf[i]=='T' && buf[i+1]=='I' && buf[i+2]=='T' && buf[i+3]=='2' && i + 11 < got) {
-                            uint32_t f_size = ((uint32_t)buf[i+4] << 24) | ((uint32_t)buf[i+5] << 16) | ((uint32_t)buf[i+6] << 8) | buf[i+7];
-                            if (hdr[3] == 4) {
-                                f_size = ((uint32_t)(buf[i+4] & 0x7F) << 21) | ((uint32_t)(buf[i+5] & 0x7F) << 14) | ((uint32_t)(buf[i+6] & 0x7F) << 7) | (uint32_t)(buf[i+7] & 0x7F);
-                            }
-                            if (f_size > 1 && i + 10 + f_size <= got && f_size < 128) {
-                                uint8_t enc = buf[i+10];
-                                int out_idx = 0;
-                                if (enc == 0 || enc == 3) {
-                                    for (uint32_t k = 1; k < f_size && out_idx < 120; k++) {
-                                        char c = (char)buf[i + 10 + k];
-                                        if (c == '\0') break;
-                                        if ((unsigned char)c >= 32) info_title_str[out_idx++] = c;
-                                    }
-                                } else if (enc == 1 || enc == 2) {
-                                    uint32_t start_k = (enc == 1 && f_size >= 3) ? 3 : 1;
-                                    for (uint32_t k = start_k; k + 1 < f_size && out_idx < 120; k += 2) {
-                                        char c = (char)buf[i + 10 + (enc == 2 ? k + 1 : k)];
-                                        if (c == '\0' && buf[i + 10 + k + 1] == '\0') break;
-                                        if ((unsigned char)c >= 32 && buf[i + 10 + (enc == 2 ? k : k + 1)] == 0) {
-                                            info_title_str[out_idx++] = c;
-                                        }
-                                    }
-                                }
-                                if (out_idx > 0) {
-                                    info_title_str[out_idx] = '\0';
-                                }
-                            }
-                        }
+                        idx += 10 + f_size;
                     }
                     if (strcmp(info_artist_str, "Unknown Artist") == 0) {
                         for (size_t i = 0; i + 7 < got; i++) {
