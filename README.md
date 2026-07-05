@@ -78,9 +78,6 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **Music App Partial Redraw on Track Change:** Split `draw_music_ui()` into `draw_music_full_ui()` (entry only, full 240×320 clear) and `draw_music_track_info()` (track changes, redraws only the track text box + status). Eliminates the unnecessary full-screen clear on every track skip that caused horizontal line artifacts bleeding into other screens.
 - **DMA Drain on App Transitions:** Added `rg_display_drain()` calls in `main.c` before clearing the screen when returning from Music or Games apps to Home. Ensures all in-flight DMA transfers from the previous app complete before the home screen is drawn, preventing stale pixel data from bleeding through.
 - **Games Page Clock Redraw Optimization:** `ui_update()` now only redraws the top-bar clock text when the time string actually changes (string comparison), instead of unconditionally every second. Eliminates unnecessary SPI/DMA churn on the games page.
-- **Music App Background & Width Fix:** Changed `MUSIC_BG` from dark-blue `RG_COLOR_RGB(10, 10, 30)` to `RG_COLOR_BLACK`. The dark-blue background made horizontal white-line artifacts (at title, track, and status Y positions) and a persistent vertical mid-screen line visible due to DMA timing edge cases. Also widened all three text boxes (`TITLE_BOX`, `TRACK_BOX`, `STATUS_BOX`) from partial-width (192/224/96px) to full 240px screen width starting at X=0. Partial-width bands left narrow gaps where stale white pixel data could show through. With full-width black-background boxes, any residual DMA artifacts are invisible.
-- **Games Page Cleanup:** Removed all text rendering, gray bars, and the `get_rtc_time()` clock from `ui.c`. `ui_init()` now clears to `RG_COLOR_BLACK` and drains DMA. `ui_update()` is a no-op — eliminates all unnecessary SPI/DMA churn from the games page that could bleed into home transitions.
-- **Music App Double-Draw Fix:** `app_music_start()` was calling `draw_music_full_ui()` (which draws title + track + status) then immediately `play_track()` (which calls `draw_music_track_info()`, re-drawing track + status). Restructured to draw the full UI once, drain DMA, then play — `play_track()` still does its partial redraw but only after the full UI's DMA is confirmed complete.
 
 ### Known Issues / In-Progress
 - **I2C Bus NACK Errors on Volume Change:** `I2C transaction unexpected nack detected` errors occur when pressing volume buttons. These happen both during playback and while paused, suggesting a hardware-level I2C bus instability (possible pull-up resistance, wiring, or ES8388 module connection issue) rather than a software race condition. Volume still changes despite the errors. Reducing I2C traffic (local volume cache, no read-before-write) mitigates but doesn't fully eliminate the NACKs.
@@ -137,3 +134,87 @@ The retro-go project uses a multi-binary architecture:
 ## Environment Paths
 - **ADF:** `C:\Users\Dell\esp\esp-adf`
 - **IDF:** `C:\Users\Dell\esp\v5.3.4\esp-idf`
+
+
+
+
+next prompt to fix:
+The home launcher currently has two rendering artifacts that need to be fixed. Please analyze the rendering pipeline and modify the code, not just explain it.
+
+## Issue 1 – Black square overlapping highlighted icon
+
+When navigating between apps, the previously selected icon is redrawn before the newly selected icon.
+
+Each icon is rendered into a fixed off-screen buffer (currently 68x68 or 72x72) and uploaded with `rg_display_write()`.
+
+The previous icon redraw clears its entire buffer to black. Since the upload rectangle overlaps the neighbouring highlighted icon, the black background temporarily overwrites part of the highlighted circle, producing a square-corner artifact.
+
+This is visible when moving from the Music icon to the Wi-Fi icon.
+
+### Fix requirements
+
+Do NOT simply redraw everything.
+
+Instead implement one of these approaches (preferred order):
+
+1. Compute a single dirty rectangle that contains BOTH the previous and current icon.
+
+   * Clear the dirty rectangle once.
+   * Draw both icons into the same temporary buffer.
+   * Upload one rectangle.
+   * Never allow an intermediate state to reach the display.
+
+OR
+
+2. If keeping per-icon rendering,
+
+   * erase the previous icon,
+   * redraw the previous icon,
+   * redraw the current highlighted icon,
+   * flush only after both have been rendered.
+
+The highlighted icon must never be partially covered by the previous icon's background.
+
+---
+
+## Issue 2 – Right edge brightness during redraw
+
+The right edge of the display becomes brighter while partial or full redraws occur.
+
+This does NOT happen when using another ILI9341 library on the same hardware, so assume this is a software issue.
+
+Investigate:
+
+* SPI transaction sequencing
+* DMA completion
+* address window updates
+* rg_display_write()
+* esp_lcd_panel_draw_bitmap()
+* rg_display_drain()
+* partial update timing
+* display flush order
+
+Determine whether multiple overlapping bitmap writes or incomplete DMA synchronization could produce temporary brightness changes.
+
+Do not assume this is a hardware issue.
+
+---
+
+## Rendering constraints
+
+* Keep the current UI.
+* Keep partial redraws.
+* Do not redraw the full screen.
+* Do not remove the animation.
+* Do not change public APIs.
+* Do not change icon positions.
+* Preserve existing colors.
+
+---
+
+## Deliverables
+
+1. Identify the exact cause of both artifacts.
+2. Modify the rendering code to eliminate them.
+3. Explain why the fix works.
+4. If another rendering architecture (dirty rectangle, double buffering, or compositing) would be more appropriate, implement it only if it improves correctness without increasing redraw area unnecessarily.

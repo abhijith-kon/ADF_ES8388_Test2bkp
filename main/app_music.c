@@ -167,8 +167,8 @@ static void draw_progress_bar(void)
     if (fill_w > SCREEN_W) fill_w = SCREEN_W;
 
     static uint16_t prog_buf[240 * 4] __attribute__((aligned(4)));
-    uint16_t bg_sw = ((PROGRESS_BG_CLR >> 8) | (PROGRESS_BG_CLR << 8));
-    uint16_t fg_sw = ((PROGRESS_FG_CLR >> 8) | (PROGRESS_FG_CLR << 8));
+    uint16_t bg_sw = (uint16_t)((PROGRESS_BG_CLR >> 8) | (PROGRESS_BG_CLR << 8));
+    uint16_t fg_sw = (uint16_t)((PROGRESS_FG_CLR >> 8) | (PROGRESS_FG_CLR << 8));
 
     for (int y = 0; y < MINI_PROGRESS_H; y++) {
         for (int x = 0; x < SCREEN_W; x++) {
