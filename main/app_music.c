@@ -120,12 +120,14 @@ static int info_bits = 16;
 static int info_channels = 2;
 static int info_bitrate = 320;
 static char info_format_str[16] = "MP3";
+static char info_artist_str[64] = "Unknown Artist";
 
-// FFT visualizer simulation state
-static float fft_val[32] = {0};
-static float fft_vel[32] = {0};
-static float fft_freq[32] = {0};
-static float fft_phase[32] = {0};
+// FFT visualizer simulation state (48 radial lines)
+#define NUM_FFT_BANDS 48
+static float fft_val[NUM_FFT_BANDS] = {0};
+static float fft_vel[NUM_FFT_BANDS] = {0};
+static float fft_freq[NUM_FFT_BANDS] = {0};
+static float fft_phase[NUM_FFT_BANDS] = {0};
 static bool fft_init = false;
 static uint16_t *vis_buf = NULL;
 
@@ -139,7 +141,7 @@ static float get_playback_progress(void);
 static void init_fft_state(void)
 {
     if (fft_init) return;
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < NUM_FFT_BANDS; i++) {
         fft_val[i] = 2.0f;
         fft_vel[i] = 0.0f;
         fft_freq[i] = 1.5f + (float)(esp_random() % 30) * 0.1f;
@@ -472,8 +474,6 @@ static void draw_player_top_area(bool full_redraw)
     if (full_redraw) {
         rg_gui_draw_rect(0, 0, SCREEN_W, 123, MUSIC_BG);
     }
-    rg_gui_set_font_size(8);
-    rg_gui_draw_text_center(SCREEN_W / 2, 6, "--- NOW PLAYING ---");
 
     if (current_track < total_tracks) {
         const char *name = playlist[current_track];
@@ -487,19 +487,22 @@ static void draw_player_top_area(bool full_redraw)
         char display[64];
         snprintf(display, sizeof(display), " %s ", name + ofs);
         rg_gui_set_font_size(16);
-        rg_gui_draw_text_line(0, 26, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, 4);
+        rg_gui_draw_text_line(0, 16, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, 4);
     }
 
+    char artist_disp[80];
+    snprintf(artist_disp, sizeof(artist_disp), "Artist: %s", info_artist_str);
     rg_gui_set_font_size(8);
-    rg_gui_draw_text_center(SCREEN_W / 2, 56, "Artist: ES8388 Audio Player");
+    rg_gui_draw_text_box(0, 50, SCREEN_W, 16, MUSIC_BG, artist_disp);
 
     char fmt_str[64];
-    snprintf(fmt_str, sizeof(fmt_str), "%s   |   %d.%d kHz   |   %d kbps",
+    snprintf(fmt_str, sizeof(fmt_str), "%s   |   %d.%01d kHz   |   %d kbps",
              info_format_str,
              info_sample_rate / 1000,
              (info_sample_rate % 1000) / 100,
              info_bitrate);
-    rg_gui_draw_text_center(SCREEN_W / 2, 76, fmt_str);
+    rg_gui_set_font_size(8);
+    rg_gui_draw_text_box(0, 72, SCREEN_W, 16, MUSIC_BG, fmt_str);
 
     float prog = get_playback_progress();
     int total_sec = 0;
@@ -521,18 +524,18 @@ static void draw_player_top_area(bool full_redraw)
 
 static void draw_volume_bar(void)
 {
-    rg_gui_draw_rect(222, 140, 10, 160, RG_COLOR_RGB(80, 180, 255));
-    int interior_h = 158;
+    rg_gui_draw_rect(220, 138, 14, 164, RG_COLOR_WHITE);
+    int interior_h = 160;
     int fill_h = (current_volume * interior_h) / 100;
     if (fill_h < 0) fill_h = 0;
     if (fill_h > interior_h) fill_h = interior_h;
     int empty_h = interior_h - fill_h;
 
     if (empty_h > 0) {
-        rg_gui_draw_rect(223, 141, 8, empty_h, RG_COLOR_RGB(20, 20, 30));
+        rg_gui_draw_rect(222, 140, 10, empty_h, RG_COLOR_RGB(100, 100, 110));
     }
     if (fill_h > 0) {
-        rg_gui_draw_rect(223, 141 + empty_h, 8, fill_h, RG_COLOR_RGB(0, 230, 180));
+        rg_gui_draw_rect(222, 140 + empty_h, 10, fill_h, RG_COLOR_RGB(0, 230, 180));
     }
 }
 
@@ -549,7 +552,26 @@ static void draw_player_visualizer(void)
     int64_t now_us = esp_timer_get_time();
     float t_sec = (float)(now_us / 1000) * 0.005f;
 
-    for (int i = 0; i < 32; i++) {
+    static float vu_meter_val = 0.0f;
+    static float vu_meter_vel = 0.0f;
+    if (is_playing) {
+        float beat_pulse = sinf(t_sec * 5.5f) * 0.5f + 0.5f + sinf(t_sec * 3.1f) * 0.3f;
+        float target_vu = beat_pulse * 0.7f + 0.3f;
+        if ((esp_random() % 100) < 15) target_vu = 1.0f;
+        if (target_vu > vu_meter_val) {
+            vu_meter_val = target_vu;
+            vu_meter_vel = 0.04f;
+        } else {
+            vu_meter_vel -= 0.008f;
+            vu_meter_val += vu_meter_vel;
+            if (vu_meter_val < 0.0f) { vu_meter_val = 0.0f; vu_meter_vel = 0.0f; }
+        }
+    } else {
+        vu_meter_val *= 0.85f;
+    }
+    int r_start = 30 + (int)(vu_meter_val * 8.0f);
+
+    for (int i = 0; i < NUM_FFT_BANDS; i++) {
         if (is_playing) {
             float base_sin = sinf(t_sec * fft_freq[i] + fft_phase[i]);
             float target = (base_sin * 0.5f + 0.5f) * 38.0f + 3.0f;
@@ -577,11 +599,10 @@ static void draw_player_visualizer(void)
             }
         }
 
-        float theta = i * (2.0f * 3.14159265f / 32.0f) - 1.5707963f;
+        float theta = i * (2.0f * 3.14159265f / (float)NUM_FFT_BANDS) - 1.5707963f;
         float cos_t = cosf(theta);
         float sin_t = sinf(theta);
-        int r_start = 32;
-        int r_end = 32 + (int)fft_val[i];
+        int r_end = r_start + (int)fft_val[i];
         if (r_end > 86) r_end = 86;
 
         int x0 = c + (int)(r_start * cos_t);
@@ -589,7 +610,7 @@ static void draw_player_visualizer(void)
         int x1 = c + (int)(r_end * cos_t);
         int y1 = c + (int)(r_end * sin_t);
 
-        uint16_t col = get_rainbow_color(i, 32);
+        uint16_t col = get_rainbow_color(i, NUM_FFT_BANDS);
         draw_line_in_buf(vis_buf, box_s, box_s, x0, y0, x1, y1, col);
         int ox = (int)(-sin_t * 1.0f);
         int oy = (int)(cos_t * 1.0f);
@@ -599,11 +620,13 @@ static void draw_player_visualizer(void)
 
     float pulse = sinf(t_sec) * 0.5f + 0.5f;
     int core_r = 13 + (int)(11.0f * pulse);
+    if (core_r >= r_start - 4) core_r = r_start - 5;
+    if (core_r < 4) core_r = 4;
     for (int y = c - core_r; y <= c + core_r; y++) {
         for (int x = c - core_r; x <= c + core_r; x++) {
             int dx = x - c, dy = y - c;
             int r2 = dx * dx + dy * dy;
-            if (r2 <= core_r * core_r && r2 < 26 * 26) {
+            if (r2 <= core_r * core_r) {
                 int dist = (int)sqrtf((float)r2);
                 int r_col = (int)(20 + 40 * pulse * (1.0f - (float)dist / core_r));
                 int g_col = (int)(10 + 30 * pulse * (1.0f - (float)dist / core_r));
@@ -615,11 +638,13 @@ static void draw_player_visualizer(void)
     }
 
     float prog = get_playback_progress();
-    for (int y = c - 30; y <= c + 30; y++) {
-        for (int x = c - 30; x <= c + 30; x++) {
+    int prog_inner = r_start - 3;
+    int prog_outer = r_start;
+    for (int y = c - prog_outer; y <= c + prog_outer; y++) {
+        for (int x = c - prog_outer; x <= c + prog_outer; x++) {
             int dx = x - c, dy = y - c;
             int r2 = dx * dx + dy * dy;
-            if (r2 >= 27 * 27 && r2 <= 30 * 30) {
+            if (r2 >= prog_inner * prog_inner && r2 <= prog_outer * prog_outer) {
                 float ang = atan2f((float)dy, (float)dx) + 1.5707963f;
                 if (ang < 0.0f) ang += 6.2831853f;
                 float norm_ang = ang / 6.2831853f;
@@ -707,7 +732,15 @@ static void play_track(int index)
         strcpy(info_format_str, "MP3");
     }
 
-    // Check for embedded thumbnail (ID3v2 APIC frame) and log to serial
+    strcpy(info_artist_str, "Unknown Artist");
+    const char *dash = strstr(playlist[index], " - ");
+    if (dash && (dash - playlist[index] < sizeof(info_artist_str))) {
+        int len = (int)(dash - playlist[index]);
+        strncpy(info_artist_str, playlist[index], len);
+        info_artist_str[len] = '\0';
+    }
+
+    // Check for embedded thumbnail (ID3v2 APIC) and Artist tag (TPE1 / Vorbis)
     {
         FILE *f = fopen(path, "rb");
         if (f) {
@@ -722,8 +755,7 @@ static void play_track(int index)
                            ((uint32_t)(hdr[7] & 0x7F) << 14) |
                            ((uint32_t)(hdr[8] & 0x7F) << 7)  |
                            ((uint32_t)(hdr[9] & 0x7F));
-                // Scan for APIC frame (album art) in first 4KB
-                uint32_t scan_len = id3_size < 4096 ? id3_size : 4096;
+                uint32_t scan_len = id3_size < 8192 ? id3_size : 8192;
                 uint8_t *buf = malloc(scan_len);
                 if (buf) {
                     fseek(f, 10, SEEK_SET);
@@ -731,17 +763,60 @@ static void play_track(int index)
                     for (size_t i = 0; i + 3 < got; i++) {
                         if (buf[i]=='A' && buf[i+1]=='P' && buf[i+2]=='I' && buf[i+3]=='C') {
                             has_apic = true;
-                            break;
+                        }
+                        if (buf[i]=='T' && buf[i+1]=='P' && buf[i+2]=='E' && buf[i+3]=='1' && i + 11 < got) {
+                            uint32_t f_size = ((uint32_t)buf[i+4] << 24) | ((uint32_t)buf[i+5] << 16) | ((uint32_t)buf[i+6] << 8) | buf[i+7];
+                            if (hdr[3] == 4) {
+                                f_size = ((uint32_t)(buf[i+4] & 0x7F) << 21) | ((uint32_t)(buf[i+5] & 0x7F) << 14) | ((uint32_t)(buf[i+6] & 0x7F) << 7) | (uint32_t)(buf[i+7] & 0x7F);
+                            }
+                            if (f_size > 1 && i + 10 + f_size <= got && f_size < 128) {
+                                uint8_t enc = buf[i+10];
+                                int out_idx = 0;
+                                if (enc == 0 || enc == 3) {
+                                    for (uint32_t k = 1; k < f_size && out_idx < 60; k++) {
+                                        char c = (char)buf[i + 10 + k];
+                                        if (c == '\0') break;
+                                        if ((unsigned char)c >= 32) info_artist_str[out_idx++] = c;
+                                    }
+                                } else if (enc == 1 || enc == 2) {
+                                    uint32_t start_k = (enc == 1 && f_size >= 3) ? 3 : 1;
+                                    for (uint32_t k = start_k; k + 1 < f_size && out_idx < 60; k += 2) {
+                                        char c = (char)buf[i + 10 + (enc == 2 ? k + 1 : k)];
+                                        if (c == '\0' && buf[i + 10 + k + 1] == '\0') break;
+                                        if ((unsigned char)c >= 32 && buf[i + 10 + (enc == 2 ? k : k + 1)] == 0) {
+                                            info_artist_str[out_idx++] = c;
+                                        }
+                                    }
+                                }
+                                if (out_idx > 0) {
+                                    info_artist_str[out_idx] = '\0';
+                                }
+                            }
+                        }
+                    }
+                    if (strcmp(info_artist_str, "Unknown Artist") == 0) {
+                        for (size_t i = 0; i + 7 < got; i++) {
+                            if (strncasecmp((const char *)&buf[i], "artist=", 7) == 0) {
+                                int out_idx = 0;
+                                for (size_t k = i + 7; k < got && out_idx < 60; k++) {
+                                    char c = (char)buf[k];
+                                    if (c < 32 || c == 0 || c == 0xFF) break;
+                                    info_artist_str[out_idx++] = c;
+                                }
+                                if (out_idx > 0) info_artist_str[out_idx] = '\0';
+                                break;
+                            }
                         }
                     }
                     free(buf);
                 }
             }
             fclose(f);
-            ESP_LOGI(TAG, "Thumbnail: ID3=%s, APIC=%s, ID3size=%lu",
+            ESP_LOGI(TAG, "Thumbnail: ID3=%s, APIC=%s, ID3size=%lu, Artist='%s'",
                      has_id3 ? "YES" : "NO",
                      has_apic ? "YES" : "NO",
-                     (unsigned long)id3_size);
+                     (unsigned long)id3_size,
+                     info_artist_str);
         }
     }
 
@@ -812,7 +887,7 @@ void app_music_handle_input(button_event_t event)
     switch (event) {
         case BTN_UP:
             if (in_player_ui) {
-                current_volume = (current_volume + 5 > 100) ? 100 : current_volume + 5;
+                current_volume = (current_volume + 10 > 100) ? 100 : current_volume + 10;
                 uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
                 es8388_write_reg(ES8388_DACCONTROL4, reg_val);
                 es8388_write_reg(ES8388_DACCONTROL5, reg_val);
@@ -838,7 +913,7 @@ void app_music_handle_input(button_event_t event)
             break;
         case BTN_DOWN:
             if (in_player_ui) {
-                current_volume = (current_volume - 5 < 0) ? 0 : current_volume - 5;
+                current_volume = (current_volume - 10 < 0) ? 0 : current_volume - 10;
                 uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
                 es8388_write_reg(ES8388_DACCONTROL4, reg_val);
                 es8388_write_reg(ES8388_DACCONTROL5, reg_val);
@@ -931,7 +1006,7 @@ void app_music_handle_input(button_event_t event)
             break;
         case BTN_VOL_UP:
             {
-                current_volume = (current_volume + 5 > 100) ? 100 : current_volume + 5;
+                current_volume = (current_volume + 10 > 100) ? 100 : current_volume + 10;
                 uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
                 es8388_write_reg(ES8388_DACCONTROL4, reg_val);
                 es8388_write_reg(ES8388_DACCONTROL5, reg_val);
@@ -945,7 +1020,7 @@ void app_music_handle_input(button_event_t event)
             break;
         case BTN_VOL_DOWN:
             {
-                current_volume = (current_volume - 5 < 0) ? 0 : current_volume - 5;
+                current_volume = (current_volume - 10 < 0) ? 0 : current_volume - 10;
                 uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
                 es8388_write_reg(ES8388_DACCONTROL4, reg_val);
                 es8388_write_reg(ES8388_DACCONTROL5, reg_val);

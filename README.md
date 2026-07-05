@@ -90,11 +90,14 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **Mini Player Track Name Scrolling:** Added independent scroll state (`mini_scroll_char_offset`, `mini_scroll_timer`) for the "now playing" mini player bar at the bottom. Long track names now scroll at 200ms intervals. Only the track name text line is redrawn for scroll updates (no full mini player redraw).
 - **MP3 Thumbnail/Album Art Detection:** Added ID3v2 header + APIC frame detection in `play_track()`. Each track now logs `Thumbnail: ID3=YES/NO, APIC=YES/NO, ID3size=N` to the serial monitor, enabling future album art display.
 - **Multi-Format Audio Scanning & Auto-Decoder Pipeline:** Upgraded the SD card background scanner (`sd_card_scan_task`) to detect `.mp3`, `.flac`, `.aac`, `.m4a`, and `.wav` audio files. Replaced the single MP3 decoder in the audio pipeline with an `esp_decoder` auto-detection array configured with `DEFAULT_ESP_MP3_DECODER_CONFIG`, `DEFAULT_ESP_FLAC_DECODER_CONFIG`, `DEFAULT_ESP_AAC_DECODER_CONFIG`, `DEFAULT_ESP_WAV_DECODER_CONFIG`, and `DEFAULT_ESP_M4A_DECODER_CONFIG`. The audio stream format, sampling rate, bit depth, and bitrate are now dynamically identified and updated in real-time.
-- **Full-Screen Dedicated Player UI & Radial RGB FFT Visualizer:** Implemented a brand new full-screen Player UI triggered by pressing ENTER over any song in the playlist. The top 2/5 of the display features header text, a smoothly scrolling song title, artist information, real-time audio format metrics (`[Format] | [Sample Rate] kHz | [Bitrate] kbps`), and elapsed playback progression (`MM:SS / MM:SS`). The bottom section features a 32-band radial RGB FFT visualizer centered around a duration progression loop and play/pause status icon. The visualizer includes simulated gravity physics on beat transients and a pulsing breathing core.
-- **Disappearing Volume Bar & Player Navigation:** In the Player UI, volume is controlled via UP/DOWN buttons, which trigger a sleek vertical volume bar on the right edge of the screen that automatically hides after 3 seconds of inactivity. Track navigation (previous/next) is mapped to LEFT/RIGHT, play/pause toggle to ENTER, and pressing ESCAPE returns seamlessly to the scroll list without interrupting playback.
+- **Full-Screen Dedicated Player UI & Radial RGB FFT Visualizer:** Implemented a brand new full-screen Player UI triggered by pressing ENTER over any song in the playlist. The top 2/5 of the display features header text, a smoothly scrolling song title, artist information, real-time audio format metrics (`[Format] | [Sample Rate] kHz | [Bitrate] kbps`), and elapsed playback progression (`MM:SS / MM:SS`). The bottom section features a simulated/procedural radial RGB FFT visualizer centered around a duration progression loop and play/pause status icon.
+- **Simulated 48-Band VU-Meter Radial FFT Visualizer:** Upgraded the procedural/simulated radial FFT visualizer in the Player UI from 32 to 48 frequency bands. Implemented dynamic VU-meter baseline modulation (`vu_meter_val`), causing the baseline radius where the frequency lines emerge and the duration loop to breathe, expand, and contract with beat transients like an analog VU meter.
+- **Dynamic ID3 & Vorbis Metadata Extraction:** Implemented ID3v2 (`TPE1`) and Vorbis (`artist=`) metadata tag parsing inside `play_track()`. The Player UI dynamically displays the true artist name (with filename prefix fallback), real-time audio format, sampling rate, and bitrate (`[Format] | [Sample Rate] kHz | [Bitrate] kbps`), replacing hardcoded strings.
+- **Volume Bar Granularity & Visibility Fix:** Adjusted volume step size from 5% to 10% increments across button and encoder controls. Fixed visual cutoff below 70% volume by adding a prominent white outline (`RG_COLOR_WHITE`) and rendering the unfilled track in visible grey (`RG_COLOR_RGB(100, 100, 110)`), ensuring the bar remains fully visible against the dark background.
+- **Disappearing Volume Bar & Player Navigation:** In the Player UI, volume is controlled via UP/DOWN buttons or encoder, triggering a vertical volume bar on the right edge of the screen that automatically hides after 3 seconds of inactivity. Track navigation (previous/next) is mapped to LEFT/RIGHT, play/pause toggle to ENTER, and pressing ESCAPE returns seamlessly to the scroll list without interrupting playback.
 
 ### Known Issues / In-Progress
-- **UI/UX Aesthetics & Design:** The current UI layout is functional but basic ("mid"); a comprehensive visual and UX redesign will be planned and implemented later based on user instructions.
+- **UI/UX Aesthetics & Design:** The current UI layout is functional and responsive; ongoing visual refinements will continue based on user feedback.
 
 ## ES8388 Module Setup (PCB Artists)
 ### Key Configuration
@@ -120,24 +123,11 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 `components/my_board/my_codec_driver/new_codec.c` and `AUDIO_NEW_CODEC_DEFAULT_HANDLE` are **unused dead code**. The board init (`board.c`) correctly uses `AUDIO_CODEC_ES8388_DEFAULT_HANDLE` (the real ADF ES8388 driver).
 
 ## Software Architecture (Current Focus)
-- **Home Menu (`rg_gui`):** The primary home screen will be built natively using `rg_gui` (avoiding the overhead of LVGL). It will feature a grid or list layout for apps.
-- **Game Sub-Menu:** A dedicated "Game App" launcher from the home menu that will host:
-  - `Retro-OS` (the media player and retro-go launcher)
-  - `Tetris` (custom built via `rg_gui`)
-  - `2048` (custom built via `rg_gui`)
-  - `Pong` (custom built via `rg_gui`)
-- **`main/play_mp3_control_example.c`**: Audio orchestration, SD card init, and input management. Will be adapted to hand off control to the `rg_gui` home menu upon boot.
-- **`components/retro-go/rg_display.c`**: Core ILI9341 SPI LCD driver. Renders the `rg_gui` primitives (rectangles, text, etc).
-- **`components/input_manager`**: Handles 74HC165 shift register and KY-040 encoder. Will feed inputs directly into the `rg_gui` menu state machine.
-
-## Game Session Architecture (from retro-go research)
-The retro-go project uses a multi-binary architecture:
-- **Launcher binary**: App selection menu with ROM browser, favorites, cover art
-- **Emulator binaries**: Separate binaries per console (NES, GB/GBC, SMS, Genesis, SNES, PC Engine, DOOM, etc.)
-- **Game session lifecycle**: `rg_emu_start()` → `rg_emu_loop()` → save state on exit
-- **Save system**: SRAM saves (.srm) + full emulator state snapshots with preview thumbnails
-- **Input**: `rg_input` API with `RG_KEY_*` constants, Core 1 I/O polling, Core 0 emulation
-- **Display**: Frame buffer management with scaling/filtering, in-game menu overlay via `rg_gui_dialog()`
+- **Home Menu (`rg_gui`):** The primary home screen is built natively using `rg_gui` (avoiding the overhead of LVGL). It features a grid/list layout for apps.
+- **Game Sub-Menu:** A dedicated "Game App" launcher from the home menu hosting Retro-OS, Tetris, 2048, and Pong.
+- **`main/app_music.c`**: Audio orchestration, SD card background scanning, ID3 parsing, audio pipeline management, and full UI/visualizer rendering.
+- **`components/retro-go/rg_display.c`**: Core ILI9341 SPI LCD driver rendering the `rg_gui` primitives.
+- **`components/input_manager`**: Handles 74HC165 shift register and KY-040 encoder inputs.
 
 ## Reference Documentation (MCP Servers)
 - `retro-go Docs`: Core OS architecture, game sessions, emulator framework.
@@ -148,16 +138,3 @@ The retro-go project uses a multi-binary architecture:
 - **ADF:** `C:\Users\Dell\esp\esp-adf`
 - **IDF:** `C:\Users\Dell\esp\v5.3.4\esp-idf`
 
-
-
-
-next prompt to fix:
-The remaining issues are:
-
-## 1. Screen Flashing on Redraws
-Brief flashes / flickering on redraws still persist on both the Home Page and the Music App scrollable list.
-
-## 2. Background Song Loading
-Loading 900+ songs synchronously takes too much time. Implement async scanning via a FreeRTOS task. Open the music app UI as soon as the first 100 songs are loaded, and continue loading the rest in the background.
-
-Please analyze these remaining issues and modify the code to fix them.
