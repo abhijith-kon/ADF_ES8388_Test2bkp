@@ -134,6 +134,9 @@ static uint16_t *vis_buf = NULL;
 static void init_audio_pipeline(void);
 static void draw_player_ui_full(void);
 static void draw_player_top_area(bool full_redraw);
+static void draw_player_title(void);
+static void draw_player_metadata(void);
+static void draw_player_timer(void);
 static void draw_player_visualizer(void);
 static void draw_volume_bar(void);
 static float get_playback_progress(void);
@@ -469,41 +472,50 @@ static void scroll_tick(void)
 }
 
 // ---- Player UI Drawing Functions ----
-static void draw_player_top_area(bool full_redraw)
+static void draw_player_title(void)
 {
-    if (full_redraw) {
-        rg_gui_draw_rect(0, 0, SCREEN_W, 123, MUSIC_BG);
+    if (current_track >= total_tracks) return;
+    const char *name = playlist[current_track];
+    int name_len = strlen(name);
+    int ofs = 0;
+    if (name_len > 14) {
+        ofs = player_scroll_char_offset;
+        int max_ofs = name_len - 14;
+        if (ofs > max_ofs) ofs = max_ofs;
     }
+    char display[64];
+    snprintf(display, sizeof(display), " %s ", name + ofs);
+    
+    rg_gui_draw_rect(0, 16, SCREEN_W, 24, MUSIC_BG);
+    rg_gui_set_font_size(16);
+    rg_gui_draw_text_line(0, 16, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, 4);
+}
 
-    if (current_track < total_tracks) {
-        const char *name = playlist[current_track];
-        int name_len = strlen(name);
-        int ofs = 0;
-        if (name_len > 14) {
-            ofs = player_scroll_char_offset;
-            int max_ofs = name_len - 14;
-            if (ofs > max_ofs) ofs = max_ofs;
-        }
-        char display[64];
-        snprintf(display, sizeof(display), " %s ", name + ofs);
-        rg_gui_set_font_size(16);
-        rg_gui_draw_text_line(0, 16, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, 4);
-    }
-
+static void draw_player_metadata(void)
+{
     char artist_disp[80];
-    snprintf(artist_disp, sizeof(artist_disp), "Artist: %s", info_artist_str);
-    rg_gui_set_font_size(8);
-    rg_gui_draw_text_box(0, 50, SCREEN_W, 16, MUSIC_BG, artist_disp);
+    snprintf(artist_disp, sizeof(artist_disp), " %s", info_artist_str);
+    ESP_LOGI(TAG, "Artist = '%s'", info_artist_str);
 
     char fmt_str[64];
-    snprintf(fmt_str, sizeof(fmt_str), "%s   |   %d.%01d kHz   |   %d kbps",
+    snprintf(fmt_str, sizeof(fmt_str), "%s | %d.%01d kHz | %d kbps",
              info_format_str,
              info_sample_rate / 1000,
              (info_sample_rate % 1000) / 100,
              info_bitrate);
+    ESP_LOGI(TAG, "Format = '%s'", fmt_str);
+
+    rg_gui_draw_rect(0, 50, SCREEN_W, 16, MUSIC_BG);
+    rg_gui_set_font_size(8);
+    rg_gui_draw_text_box(0, 50, SCREEN_W, 16, MUSIC_BG, artist_disp);
+
+    rg_gui_draw_rect(0, 72, SCREEN_W, 16, MUSIC_BG);
     rg_gui_set_font_size(8);
     rg_gui_draw_text_box(0, 72, SCREEN_W, 16, MUSIC_BG, fmt_str);
+}
 
+static void draw_player_timer(void)
+{
     float prog = get_playback_progress();
     int total_sec = 0;
     if (info_bitrate > 0 && current_track_bytes > 0) {
@@ -515,11 +527,21 @@ static void draw_player_top_area(bool full_redraw)
     char time_str[32];
     snprintf(time_str, sizeof(time_str), "%02d:%02d / %02d:%02d",
              cur_sec / 60, cur_sec % 60, total_sec / 60, total_sec % 60);
-    rg_gui_draw_text_center(SCREEN_W / 2, 98, time_str);
 
+    rg_gui_draw_rect(0, 90, SCREEN_W, 20, MUSIC_BG);
+    rg_gui_set_font_size(8);
+    rg_gui_draw_text_center(SCREEN_W / 2, 96, time_str);
+}
+
+static void draw_player_top_area(bool full_redraw)
+{
     if (full_redraw) {
+        rg_gui_draw_rect(0, 0, SCREEN_W, 123, MUSIC_BG);
         rg_gui_draw_rect(0, 124, SCREEN_W, 1, SEP_COLOR);
     }
+    draw_player_title();
+    draw_player_metadata();
+    draw_player_timer();
 }
 
 static void draw_volume_bar(void)
@@ -1067,7 +1089,8 @@ void app_music_tick(void)
                     info_bitrate = 320;
                 }
                 if (in_player_ui) {
-                    draw_player_top_area(false);
+                    draw_player_metadata();
+                    draw_player_timer();
                 }
             }
             if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT
@@ -1091,32 +1114,32 @@ void app_music_tick(void)
     // If in Player UI, handle visualizer, time updates, title scrolling, volume bar
     if (in_player_ui) {
         int64_t now_ms = esp_timer_get_time() / 1000;
-        if (now_ms - last_vis_time >= 40) {
+        if (now_ms - last_vis_time >= 25) {
             last_vis_time = now_ms;
             draw_player_visualizer();
         }
         if (is_playing && now_ms - last_time_update >= 500) {
             last_time_update = now_ms;
-            draw_player_top_area(false);
+            draw_player_timer();
         }
         if (current_track < total_tracks) {
             const char *name = playlist[current_track];
             int name_len = strlen(name);
             if (name_len > 14) {
-                if (now_ms - player_scroll_timer >= 200) {
+                if (now_ms - player_scroll_timer >= 150) {
                     player_scroll_timer = now_ms;
                     player_scroll_char_offset++;
                     int max_ofs = name_len - 14;
                     if (player_scroll_char_offset > max_ofs + 4) {
                         player_scroll_char_offset = 0;
                     }
-                    draw_player_top_area(false);
+                    draw_player_title();
                 }
             }
         }
         if (vol_bar_visible && (now_ms - vol_bar_timer >= 3000)) {
             vol_bar_visible = false;
-            rg_gui_draw_rect(222, 140, 10, 160, MUSIC_BG);
+            rg_gui_draw_rect(220, 138, 14, 164, MUSIC_BG);
         }
         return;
     }
