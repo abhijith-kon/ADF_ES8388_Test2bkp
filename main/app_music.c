@@ -123,7 +123,7 @@ static char info_format_str[16] = "MP3";
 static char info_artist_str[64] = "Unknown Artist";
 static char info_title_str[128] = "";
 
-// FFT visualizer simulation state (48 radial lines)
+// FFT visualizer state (48 radial lines)
 #define NUM_FFT_BANDS 48
 static float fft_val[NUM_FFT_BANDS] = {0};
 static float fft_vel[NUM_FFT_BANDS] = {0};
@@ -131,6 +131,7 @@ static float fft_freq[NUM_FFT_BANDS] = {0};
 static float fft_phase[NUM_FFT_BANDS] = {0};
 static bool fft_init = false;
 static uint16_t *vis_buf = NULL;
+static ringbuf_handle_t fft_ringbuf = NULL;
 
 static void init_audio_pipeline(void);
 static void draw_player_ui_full(void);
@@ -263,7 +264,15 @@ static void init_audio_pipeline(void)
     i2s_cfg.out_rb_size = 32 * 1024;
     i2s_cfg.chan_cfg.dma_desc_num = 6;
     i2s_cfg.chan_cfg.dma_frame_num = 480;
+    i2s_cfg.multi_out_num = 1;
     i2s_stream_writer = i2s_stream_init(&i2s_cfg);
+
+    if (!fft_ringbuf) {
+        fft_ringbuf = rb_create(4096, 1);
+    }
+    if (fft_ringbuf) {
+        audio_element_set_multi_output_ringbuf(i2s_stream_writer, fft_ringbuf, 0);
+    }
 
     audio_decoder_t auto_decode[] = {
         DEFAULT_ESP_MP3_DECODER_CONFIG(),
@@ -562,6 +571,51 @@ static void draw_volume_bar(void)
     }
 }
 
+static void compute_fft_128(float *real, float *imag)
+{
+    int n = 128;
+    int j = 0;
+    for (int i = 0; i < n - 1; i++) {
+        if (i < j) {
+            float tr = real[i]; real[i] = real[j]; real[j] = tr;
+            float ti = imag[i]; imag[i] = imag[j]; imag[j] = ti;
+        }
+        int k = n >> 1;
+        while (k <= j) {
+            j -= k;
+            k >>= 1;
+        }
+        j += k;
+    }
+
+    for (int len = 2; len <= n; len <<= 1) {
+        float angle = -2.0f * 3.14159265358979323846f / len;
+        float wlen_r = cosf(angle);
+        float wlen_i = sinf(angle);
+        for (int i = 0; i < n; i += len) {
+            float w_r = 1.0f;
+            float w_i = 0.0f;
+            int half = len >> 1;
+            for (int k = 0; k < half; k++) {
+                int idx1 = i + k;
+                int idx2 = i + k + half;
+                float u_r = real[idx1];
+                float u_i = imag[idx1];
+                float v_r = real[idx2] * w_r - imag[idx2] * w_i;
+                float v_i = real[idx2] * w_i + imag[idx2] * w_r;
+                real[idx1] = u_r + v_r;
+                imag[idx1] = u_i + v_i;
+                real[idx2] = u_r - v_r;
+                imag[idx2] = u_i - v_i;
+                float next_w_r = w_r * wlen_r - w_i * wlen_i;
+                float next_w_i = w_r * wlen_i + w_i * wlen_r;
+                w_r = next_w_r;
+                w_i = next_w_i;
+            }
+        }
+    }
+}
+
 static void draw_player_visualizer(void)
 {
     if (!vis_buf) return;
@@ -577,10 +631,47 @@ static void draw_player_visualizer(void)
 
     static float vu_meter_val = 0.0f;
     static float vu_meter_vel = 0.0f;
-    if (is_playing) {
-        float beat_pulse = sinf(t_sec * 5.5f) * 0.5f + 0.5f + sinf(t_sec * 3.1f) * 0.3f;
-        float target_vu = beat_pulse * 0.7f + 0.3f;
-        if ((esp_random() % 100) < 15) target_vu = 1.0f;
+    static uint8_t pcm_read_buf[4096];
+    static float fft_real[128];
+    static float fft_imag[128];
+    float target_vu = 0.0f;
+    bool have_real_audio = false;
+
+    if (is_playing && fft_ringbuf) {
+        int avail = rb_bytes_available(fft_ringbuf);
+        if (avail > 0) {
+            if (avail > (int)sizeof(pcm_read_buf)) avail = (int)sizeof(pcm_read_buf);
+            int bytes_read = rb_read(fft_ringbuf, (char*)pcm_read_buf, avail, 0);
+            int bytes_per_sample = (info_channels == 2) ? 4 : 2;
+            int total_samples = bytes_read / bytes_per_sample;
+            if (total_samples >= 128) {
+                int start_sample = total_samples - 128;
+                int16_t *pcm16 = (int16_t*)pcm_read_buf;
+                float sum_sq = 0.0f;
+                for (int i = 0; i < 128; i++) {
+                    int idx = (start_sample + i) * (info_channels == 2 ? 2 : 1);
+                    float sample_val;
+                    if (info_channels == 2) {
+                        sample_val = 0.5f * ((float)pcm16[idx] + (float)pcm16[idx + 1]);
+                    } else {
+                        sample_val = (float)pcm16[idx];
+                    }
+                    float norm_s = sample_val / 32768.0f;
+                    sum_sq += norm_s * norm_s;
+                    float hann = 0.5f * (1.0f - cosf(6.2831853f * (float)i / 127.0f));
+                    fft_real[i] = norm_s * hann;
+                    fft_imag[i] = 0.0f;
+                }
+                float rms = sqrtf(sum_sq / 128.0f);
+                target_vu = rms * 3.5f;
+                if (target_vu > 1.0f) target_vu = 1.0f;
+                compute_fft_128(fft_real, fft_imag);
+                have_real_audio = true;
+            }
+        }
+    }
+
+    if (have_real_audio) {
         if (target_vu > vu_meter_val) {
             vu_meter_val = target_vu;
             vu_meter_vel = 0.04f;
@@ -595,13 +686,21 @@ static void draw_player_visualizer(void)
     int r_start = 30 + (int)(vu_meter_val * 8.0f);
 
     for (int i = 0; i < NUM_FFT_BANDS; i++) {
-        if (is_playing) {
-            float base_sin = sinf(t_sec * fft_freq[i] + fft_phase[i]);
-            float target = (base_sin * 0.5f + 0.5f) * 38.0f + 3.0f;
-            if ((esp_random() % 100) < 12) {
-                target += (float)(esp_random() % 20);
+        if (have_real_audio) {
+            int k_start = (int)(1.0f + powf((float)i / 48.0f, 1.4f) * 60.0f);
+            int k_end   = (int)(1.0f + powf((float)(i + 1) / 48.0f, 1.4f) * 60.0f);
+            if (k_end <= k_start) k_end = k_start + 1;
+            if (k_end > 63) k_end = 63;
+            float band_max = 0.0f;
+            for (int k = k_start; k < k_end; k++) {
+                float mag = sqrtf(fft_real[k] * fft_real[k] + fft_imag[k] * fft_imag[k]);
+                if (mag > band_max) band_max = mag;
             }
+            float freq_boost = 1.0f + ((float)i / (float)NUM_FFT_BANDS) * 2.5f;
+            float target = band_max * 18.0f * freq_boost;
             if (target > 48.0f) target = 48.0f;
+            if (target < 2.0f) target = 2.0f;
+
             if (target > fft_val[i]) {
                 fft_val[i] = target;
                 fft_vel[i] = 2.0f;
@@ -642,7 +741,7 @@ static void draw_player_visualizer(void)
     }
 
     float pulse = sinf(t_sec) * 0.5f + 0.5f;
-    int core_r = 13 + (int)(11.0f * pulse);
+    int core_r = 10 + (int)(9.0f * pulse);
     if (core_r >= r_start - 4) core_r = r_start - 5;
     if (core_r < 4) core_r = 4;
     for (int y = c - core_r; y <= c + core_r; y++) {
@@ -733,6 +832,9 @@ static void play_track(int index)
         audio_pipeline_terminate(pipeline);
         audio_pipeline_reset_ringbuffer(pipeline);
         audio_pipeline_reset_elements(pipeline);
+    }
+    if (fft_ringbuf) {
+        rb_reset(fft_ringbuf);
     }
 
     char path[256];
@@ -956,6 +1058,9 @@ void app_music_stop(void)
         is_playing = false;
         pipeline_has_run = false;
     }
+    if (fft_ringbuf) {
+        rb_reset(fft_ringbuf);
+    }
 }
 
 void app_music_handle_input(button_event_t event)
@@ -1051,6 +1156,7 @@ void app_music_handle_input(button_event_t event)
                         audio_pipeline_pause(pipeline);
                         is_playing = false;
                     } else if (pipeline_has_run) {
+                        if (fft_ringbuf) rb_reset(fft_ringbuf);
                         audio_pipeline_resume(pipeline);
                         is_playing = true;
                     }
@@ -1059,6 +1165,7 @@ void app_music_handle_input(button_event_t event)
                     if (selected_index == current_track && is_playing) {
                         // Already playing, just open player ui
                     } else if (selected_index == current_track && !is_playing && pipeline_has_run) {
+                        if (fft_ringbuf) rb_reset(fft_ringbuf);
                         audio_pipeline_resume(pipeline);
                         is_playing = true;
                     } else {
