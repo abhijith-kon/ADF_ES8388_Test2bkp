@@ -1,6 +1,7 @@
 #include "app_music.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -14,6 +15,8 @@
 #include "audio_event_iface.h"
 #include "rg_gui.h"
 #include "rg_display.h"
+#include "es8388.h"
+#include "audio_volume.h"
 #include <stdio.h>
 
 static const char *TAG = "APP_MUSIC";
@@ -23,6 +26,9 @@ static char **playlist = NULL;
 static int total_tracks = 0;
 static int current_track = 0;
 static bool music_initialized = false;
+static SemaphoreHandle_t playlist_mutex = NULL;
+static volatile bool scan_in_progress = false;
+static int last_known_total_tracks = 0;
 
 static audio_pipeline_handle_t pipeline = NULL;
 static audio_element_handle_t fatfs_stream_reader = NULL;
@@ -70,7 +76,7 @@ static int view_start = 0;
 
 static int scroll_char_offset = 0;
 static int64_t scroll_timer = 0;
-#define SCROLL_INTERVAL_MS 400
+#define SCROLL_INTERVAL_MS 150
 #define MAX_NAME_CHARS     27
 
 static size_t current_track_bytes = 0;
@@ -82,25 +88,52 @@ static bool player_dirty = true;
 static bool slot_dirty[6] = {false};
 static int prev_selected = -1;
 
-// ---- SD Card Scan ----
-static void scan_sd_card_for_mp3s(void)
+// Mini player scroll state
+static int mini_scroll_char_offset = 0;
+static int64_t mini_scroll_timer = 0;
+#define MINI_SCROLL_INTERVAL_MS 200
+#define MINI_MAX_NAME_CHARS     27
+static bool mini_player_scroll_dirty = false;
+
+static void init_audio_pipeline(void);
+
+static void sd_card_scan_task(void *arg)
 {
+    scan_in_progress = true;
     DIR *dir = opendir("/sdcard");
     if (!dir) {
         ESP_LOGE(TAG, "Failed to open /sdcard");
+        scan_in_progress = false;
+        vTaskDelete(NULL);
         return;
     }
     struct dirent *ent;
-    while ((ent = readdir(dir)) != NULL && total_tracks < MAX_PLAYLIST_FILES) {
+    while ((ent = readdir(dir)) != NULL) {
         size_t len = strlen(ent->d_name);
         if (len > 4 && strcasecmp(ent->d_name + len - 4, ".mp3") == 0) {
-            playlist[total_tracks] = strdup(ent->d_name);
-            ESP_LOGI(TAG, "Found track %d: %s", total_tracks, playlist[total_tracks]);
-            total_tracks++;
+            if (playlist_mutex) xSemaphoreTake(playlist_mutex, portMAX_DELAY);
+            if (total_tracks < MAX_PLAYLIST_FILES) {
+                playlist[total_tracks] = strdup(ent->d_name);
+                total_tracks++;
+            }
+            int cur_count = total_tracks;
+            if (playlist_mutex) xSemaphoreGive(playlist_mutex);
+
+            if (cur_count == 1) {
+                init_audio_pipeline();
+            }
+            if (cur_count >= MAX_PLAYLIST_FILES) {
+                break;
+            }
+            if (cur_count % 10 == 0) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
         }
     }
     closedir(dir);
-    ESP_LOGI(TAG, "Total MP3 tracks found: %d", total_tracks);
+    ESP_LOGI(TAG, "Background scan finished. Total MP3 tracks found: %d", total_tracks);
+    scan_in_progress = false;
+    vTaskDelete(NULL);
 }
 
 // ---- Audio Pipeline Init ----
@@ -227,11 +260,19 @@ static void draw_song_list(void)
 
 static void draw_mini_player(void)
 {
-    // Track name
+    // Track name with scrolling
     if (pipeline_has_run && current_track < total_tracks) {
+        const char *name = playlist[current_track];
+        int name_len = strlen(name);
+        int ofs = 0;
+        if (name_len > MINI_MAX_NAME_CHARS) {
+            ofs = mini_scroll_char_offset;
+            int max_ofs = name_len - MINI_MAX_NAME_CHARS;
+            if (ofs > max_ofs) ofs = max_ofs;
+        }
         char display[64];
         const char *icon = is_playing ? "> " : "= ";
-        snprintf(display, sizeof(display), "%s%s", icon, playlist[current_track]);
+        snprintf(display, sizeof(display), "%s%s", icon, name + ofs);
         rg_gui_set_font_size(8);
         rg_gui_draw_text_line(0, MINI_TRACK_Y, SCREEN_W, MINI_TRACK_H,
                               MUSIC_BG, RG_COLOR_WHITE, display, 8);
@@ -337,6 +378,44 @@ static void play_track(int index)
     audio_element_set_uri(fatfs_stream_reader, path);
     ESP_LOGI(TAG, "Playing Track [%d/%d]: %s", index + 1, total_tracks, playlist[index]);
 
+    // Check for embedded thumbnail (ID3v2 APIC frame) and log to serial
+    {
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            uint8_t hdr[10];
+            bool has_id3 = false;
+            bool has_apic = false;
+            uint32_t id3_size = 0;
+            if (fread(hdr, 1, 10, f) == 10 &&
+                hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3') {
+                has_id3 = true;
+                id3_size = ((uint32_t)(hdr[6] & 0x7F) << 21) |
+                           ((uint32_t)(hdr[7] & 0x7F) << 14) |
+                           ((uint32_t)(hdr[8] & 0x7F) << 7)  |
+                           ((uint32_t)(hdr[9] & 0x7F));
+                // Scan for APIC frame (album art) in first 4KB
+                uint32_t scan_len = id3_size < 4096 ? id3_size : 4096;
+                uint8_t *buf = malloc(scan_len);
+                if (buf) {
+                    fseek(f, 10, SEEK_SET);
+                    size_t got = fread(buf, 1, scan_len, f);
+                    for (size_t i = 0; i + 3 < got; i++) {
+                        if (buf[i]=='A' && buf[i+1]=='P' && buf[i+2]=='I' && buf[i+3]=='C') {
+                            has_apic = true;
+                            break;
+                        }
+                    }
+                    free(buf);
+                }
+            }
+            fclose(f);
+            ESP_LOGI(TAG, "Thumbnail: ID3=%s, APIC=%s, ID3size=%lu",
+                     has_id3 ? "YES" : "NO",
+                     has_apic ? "YES" : "NO",
+                     (unsigned long)id3_size);
+        }
+    }
+
     audio_pipeline_run(pipeline);
     pipeline_has_run = true;
     is_playing = true;
@@ -344,6 +423,8 @@ static void play_track(int index)
 
     list_full_dirty = true;
     player_dirty = true;
+    mini_scroll_char_offset = 0;
+    mini_scroll_timer = esp_timer_get_time() / 1000;
 }
 
 // ---- Public API ----
@@ -356,13 +437,17 @@ void app_music_start(void)
 {
     ESP_LOGI(TAG, "Music App Started");
     if (!music_initialized) {
+        if (!playlist_mutex) {
+            playlist_mutex = xSemaphoreCreateMutex();
+        }
         if (!playlist) {
             playlist = calloc(MAX_PLAYLIST_FILES, sizeof(char *));
         }
-        scan_sd_card_for_mp3s();
-        if (total_tracks > 0) {
-            init_audio_pipeline();
+        xTaskCreate(sd_card_scan_task, "sd_scan_task", 4096, NULL, 5, NULL);
+        while (scan_in_progress && total_tracks < 100) {
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
+        last_known_total_tracks = total_tracks;
         music_initialized = true;
     }
     selected_index = current_track;
@@ -379,7 +464,11 @@ void app_music_stop(void)
     if (pipeline && pipeline_has_run) {
         audio_pipeline_stop(pipeline);
         audio_pipeline_wait_for_stop(pipeline);
+        audio_pipeline_terminate(pipeline);
+        audio_pipeline_reset_ringbuffer(pipeline);
+        audio_pipeline_reset_elements(pipeline);
         is_playing = false;
+        pipeline_has_run = false;
     }
 }
 
@@ -461,23 +550,24 @@ void app_music_handle_input(button_event_t event)
             }
             break;
         case BTN_VOL_UP:
-            if (music_hal_handle) {
+            {
                 current_volume = (current_volume + 5 > 100) ? 100 : current_volume + 5;
-                for (int retry = 0; retry < 3; retry++) {
-                    if (audio_hal_set_volume(music_hal_handle, current_volume) == ESP_OK) break;
-                    vTaskDelay(pdMS_TO_TICKS(10));
-                }
-                ESP_LOGI(TAG, "Volume: %d", current_volume);
+                // Bypass audio_hal_set_volume to avoid legacy/new I2C driver conflict (NACK bug).
+                // Write ES8388 DAC volume registers directly.
+                // ES8388 volume range: 0x00 = 0dB, 0xC0 = -96dB. Map 0-100 linearly.
+                uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
+                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
+                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
+                ESP_LOGI(TAG, "Volume: %d (reg=0x%02x)", current_volume, reg_val);
             }
             break;
         case BTN_VOL_DOWN:
-            if (music_hal_handle) {
+            {
                 current_volume = (current_volume - 5 < 0) ? 0 : current_volume - 5;
-                for (int retry = 0; retry < 3; retry++) {
-                    if (audio_hal_set_volume(music_hal_handle, current_volume) == ESP_OK) break;
-                    vTaskDelay(pdMS_TO_TICKS(10));
-                }
-                ESP_LOGI(TAG, "Volume: %d", current_volume);
+                uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
+                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
+                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
+                ESP_LOGI(TAG, "Volume: %d (reg=0x%02x)", current_volume, reg_val);
             }
             break;
         default:
@@ -487,6 +577,10 @@ void app_music_handle_input(button_event_t event)
 
 void app_music_tick(void)
 {
+    if (total_tracks != last_known_total_tracks) {
+        last_known_total_tracks = total_tracks;
+        list_full_dirty = true;
+    }
     // 1. Handle audio pipeline events
     if (evt) {
         audio_event_iface_msg_t msg;
@@ -514,6 +608,26 @@ void app_music_tick(void)
 
     // 2. Text scrolling for selected item
     scroll_tick();
+
+    // 2b. Mini player track name scrolling
+    if (pipeline_has_run && current_track < total_tracks) {
+        const char *mname = playlist[current_track];
+        int mlen = strlen(mname);
+        if (mlen > MINI_MAX_NAME_CHARS) {
+            int64_t mnow = esp_timer_get_time() / 1000;
+            if (mnow - mini_scroll_timer >= MINI_SCROLL_INTERVAL_MS) {
+                mini_scroll_timer = mnow;
+                mini_scroll_char_offset++;
+                int mmax = mlen - MINI_MAX_NAME_CHARS;
+                if (mini_scroll_char_offset > mmax + 4) {
+                    mini_scroll_char_offset = 0;
+                }
+                mini_player_scroll_dirty = true;
+            }
+        } else {
+            mini_scroll_char_offset = 0;
+        }
+    }
 
     // 3. Redraw list if dirty
     if (list_full_dirty) {
@@ -544,6 +658,24 @@ void app_music_tick(void)
     if (player_dirty) {
         draw_mini_player();
         player_dirty = false;
+        mini_player_scroll_dirty = false;
+    } else if (mini_player_scroll_dirty) {
+        // Only redraw the track name line for scroll updates
+        if (pipeline_has_run && current_track < total_tracks) {
+            const char *sname = playlist[current_track];
+            int slen = strlen(sname);
+            int ofs = mini_scroll_char_offset;
+            int max_ofs = slen - MINI_MAX_NAME_CHARS;
+            if (max_ofs < 0) max_ofs = 0;
+            if (ofs > max_ofs) ofs = max_ofs;
+            char display[64];
+            const char *icon = is_playing ? "> " : "= ";
+            snprintf(display, sizeof(display), "%s%s", icon, sname + ofs);
+            rg_gui_set_font_size(8);
+            rg_gui_draw_text_line(0, MINI_TRACK_Y, SCREEN_W, MINI_TRACK_H,
+                                  MUSIC_BG, RG_COLOR_WHITE, display, 8);
+        }
+        mini_player_scroll_dirty = false;
     }
 
     // 5. Update progress bar periodically when playing

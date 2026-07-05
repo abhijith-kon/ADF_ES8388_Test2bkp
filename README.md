@@ -81,15 +81,17 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **FATFS Long Filename (LFN) Support:** Enabled `CONFIG_FATFS_LFN_HEAP=y` with `CONFIG_FATFS_MAX_LFN=255` in sdkconfig. FATFS now successfully returns and displays full song titles instead of abbreviated 8.3 short names.
 - **SD Card Song Loading & Lazy Init:** Playlist scanning moved from boot (`app_music_init`) to when the app opens (`app_music_start`), and capacity increased from 100 to 1000 tracks via heap-allocated `calloc`. Successfully tested loading all 900+ songs without crashing.
 - **Button Navigation Mapping:** Perfected controls so UP/DOWN scroll through the song list and LEFT/RIGHT directly skip to and play the previous/next track.
+- **I2C Volume NACK Fix (Direct Register Write & Clock Stretching):** Root cause of `I2C transaction unexpected nack detected` and pipeline I/O aborts during volume changes: ADF's `audio_hal_set_volume` uses the legacy I2C driver while IDF5's I2S stream initializes the new I2C master driver on the same port, causing hardware-level contention and NACKs when the codec is busy streaming. Fixed by bypassing `audio_hal_set_volume` and writing DACCONTROL4/DACCONTROL5 volume registers directly via `es8388_write_reg()`, combined with `.scl_wait_us = 300000` clock stretching and automatic 5-attempt retry loops in `i2c_bus_v2.c`.
+- **Screen Flashing on Redraws Fix:** Eliminated brief white screen flashes and flickering on both the Home Page and Music App list. Root cause: `rg_display_drain()` was sending an SPI NOP command (`0x00`) to the ILI9341 display after every primitive draw call (text lines, boxes, rects) to wait for DMA completion, which glitched the TFT display controller's gate/source drivers. Replaced the NOP command in `rg_display_drain()` with a clean 200us yield (`esp_rom_delay_us(200)`), allowing blocking SPI DMA transfers to finish without sending bogus commands to the panel.
+- **Background SD Card Scanning:** Resolved the noticeable loading delay when opening the music app with 900+ songs. Implemented asynchronous background scanning via a FreeRTOS task (`sd_card_scan_task`) and a mutex-protected `total_tracks` counter (`playlist_mutex`). The UI opens as soon as the first 100 tracks are discovered, and the main loop dynamically refreshes the song list as additional tracks are found in the background.
+- **Pipeline Cleanup & Abort Warnings Fix:** Resolved `AUDIO_ELEMENT: OUT-[file] AEL_IO_ABORT` and `-3` warnings when re-entering the music app or switching tracks. Added full pipeline tear-down (`audio_pipeline_terminate`, `reset_ringbuffer`, and `reset_elements`) inside `app_music_stop()`, ensuring clean state resets between app transitions.
+- **Icon Ghost Outline & Corner Overlap Fix:** Root cause of ghost rings: shrinking icons needed a full 68x68 (`NODE_SIZE`) black blit to erase previous animation states. Root cause of black corner overlap on the selected icon: adjacent 68x68 square bounding boxes overlap by ~15 pixels in the corners. When unselected icons were drawn after the selected icon, their solid black bounding box corners overwrote the highlighted icon's circular edge. Fixed by modifying `home_ui_draw()` to always draw unselected icons first and guarantee the selected/highlighted icon is drawn last on top of all others.
+- **Faster List Text Scrolling:** Reduced `SCROLL_INTERVAL_MS` from 400ms to 150ms for much smoother character-by-character scrolling of long song titles in the selected list item.
+- **Mini Player Track Name Scrolling:** Added independent scroll state (`mini_scroll_char_offset`, `mini_scroll_timer`) for the "now playing" mini player bar at the bottom. Long track names now scroll at 200ms intervals. Only the track name text line is redrawn for scroll updates (no full mini player redraw).
+- **MP3 Thumbnail/Album Art Detection:** Added ID3v2 header + APIC frame detection in `play_track()`. Each track now logs `Thumbnail: ID3=YES/NO, APIC=YES/NO, ID3size=N` to the serial monitor, enabling future album art display.
 
 ### Known Issues / In-Progress
 - **UI/UX Aesthetics & Design:** The current UI layout is functional but basic ("mid"); a comprehensive visual and UX redesign will be planned and implemented later based on user instructions.
-- **Home Menu Icon Ghosting / Outline Artifacts:** While the black box artifact was resolved by dynamic circle sizing, deselecting an icon now leaves behind ring/line artifacts (ghost outlines) around the last selected icon showing its intermediate growth/shrink states.
-- **Screen Flashing on Redraws:** Brief white screen flashes / flickering on redraws still persist on both the Home Page and the Music App scrollable list, despite partial slot dirty tracking.
-- **Slow SD Card Scanning / Background Loading Needed:** Scanning 900+ songs synchronously upon opening the music app causes a noticeable loading delay. This needs to be modified to load in the background (asynchronously), opening the UI as soon as the first 100 songs are found while continuing to scan the rest.
-- **Slow & Choppy Text Scrolling:** The auto-scrolling for long song titles on the selected list item is slow and choppy. Furthermore, scrolling needs to be implemented for the mini player bar ("now playing" song title) at the bottom as well.
-- **I2C Volume Control Bug & Stereo Imbalance:** `I2C transaction unexpected nack detected` errors continue during encoder volume adjustments. The 3-attempt retry loop did not resolve this hardware/bus-level issue, causing erratic earphone stereo behavior (one earphone volume changing independently or one channel randomly going deaf/mute).
-- **Pipeline File Abort Warnings:** When skipping tracks rapidly or stopping playback, warnings like `AUDIO_ELEMENT: OUT-[file] AEL_IO_ABORT` and `MP3_DECODER: Output aborted, -3` appear in the log. This is due to the audio pipeline being stopped abruptly while elements are still processing or blocking on I/O. The system handles it gracefully by resetting for the next track, but a cleaner tear-down sequence might eliminate these warnings.
 
 ## ES8388 Module Setup (PCB Artists)
 ### Key Configuration
@@ -147,82 +149,12 @@ The retro-go project uses a multi-binary architecture:
 
 
 next prompt to fix:
-The home launcher currently has two rendering artifacts that need to be fixed. Please analyze the rendering pipeline and modify the code, not just explain it.
+The remaining issues are:
 
-## Issue 1 – Black square overlapping highlighted icon
+## 1. Screen Flashing on Redraws
+Brief flashes / flickering on redraws still persist on both the Home Page and the Music App scrollable list.
 
-When navigating between apps, the previously selected icon is redrawn before the newly selected icon.
+## 2. Background Song Loading
+Loading 900+ songs synchronously takes too much time. Implement async scanning via a FreeRTOS task. Open the music app UI as soon as the first 100 songs are loaded, and continue loading the rest in the background.
 
-Each icon is rendered into a fixed off-screen buffer (currently 68x68 or 72x72) and uploaded with `rg_display_write()`.
-
-The previous icon redraw clears its entire buffer to black. Since the upload rectangle overlaps the neighbouring highlighted icon, the black background temporarily overwrites part of the highlighted circle, producing a square-corner artifact.
-
-This is visible when moving from the Music icon to the Wi-Fi icon.
-
-### Fix requirements
-
-Do NOT simply redraw everything.
-
-Instead implement one of these approaches (preferred order):
-
-1. Compute a single dirty rectangle that contains BOTH the previous and current icon.
-
-   * Clear the dirty rectangle once.
-   * Draw both icons into the same temporary buffer.
-   * Upload one rectangle.
-   * Never allow an intermediate state to reach the display.
-
-OR
-
-2. If keeping per-icon rendering,
-
-   * erase the previous icon,
-   * redraw the previous icon,
-   * redraw the current highlighted icon,
-   * flush only after both have been rendered.
-
-The highlighted icon must never be partially covered by the previous icon's background.
-
----
-
-## Issue 2 – Right edge brightness during redraw
-
-The right edge of the display becomes brighter while partial or full redraws occur.
-
-This does NOT happen when using another ILI9341 library on the same hardware, so assume this is a software issue.
-
-Investigate:
-
-* SPI transaction sequencing
-* DMA completion
-* address window updates
-* rg_display_write()
-* esp_lcd_panel_draw_bitmap()
-* rg_display_drain()
-* partial update timing
-* display flush order
-
-Determine whether multiple overlapping bitmap writes or incomplete DMA synchronization could produce temporary brightness changes.
-
-Do not assume this is a hardware issue.
-
----
-
-## Rendering constraints
-
-* Keep the current UI.
-* Keep partial redraws.
-* Do not redraw the full screen.
-* Do not remove the animation.
-* Do not change public APIs.
-* Do not change icon positions.
-* Preserve existing colors.
-
----
-
-## Deliverables
-
-1. Identify the exact cause of both artifacts.
-2. Modify the rendering code to eliminate them.
-3. Explain why the fix works.
-4. If another rendering architecture (dirty rectangle, double buffering, or compositing) would be more appropriate, implement it only if it improves correctness without increasing redraw area unnecessarily.
+Please analyze these remaining issues and modify the code to fix them.

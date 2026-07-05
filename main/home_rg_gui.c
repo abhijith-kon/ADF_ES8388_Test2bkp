@@ -189,11 +189,9 @@ static void draw_app_node(int idx) {
     const bool focused = (idx == home_ui.selected);
     const int r = home_ui.icon_radius[idx];
 
-    // Dynamic blit size: diameter + 2px margin, clamped to max NODE_SIZE
+    // Always blit full NODE_SIZE to erase ghost outlines from prior animation states
     #define NODE_SIZE 68
-    int blit_size = (r + 1) * 2;
-    if (blit_size > NODE_SIZE) blit_size = NODE_SIZE;
-    if (blit_size < 4) blit_size = 4;
+    int blit_size = NODE_SIZE;
     int blit_half = blit_size / 2;
 
     // Quad buffering: 4 buffers to prevent DMA corruption across multiple frames
@@ -212,7 +210,7 @@ static void draw_app_node(int idx) {
     int r_sq = r * r;
     int inner_r_sq = (r - border_w) * (r - border_w);
 
-    // Fill buffer using blit_size dimensions
+    // Fill entire NODE_SIZE x NODE_SIZE buffer — black outside circle erases ghost rings
     for (int y = 0; y < blit_size; y++) {
         int dy = y - blit_half;
         int dy_sq = dy * dy;
@@ -268,10 +266,11 @@ void home_ui_draw(void) {
         rg_gui_clear(RG_COLOR_BLACK);
         first_draw = false;
         
-        // Force draw all icons initially
+        // Force draw all icons initially, selected icon last
         for (int i = 0; i < NUM_APPS; i++) {
-            draw_app_node(i);
+            if (i != home_ui.selected) draw_app_node(i);
         }
+        draw_app_node(home_ui.selected);
         
         rg_gui_set_font_size(14);
         rg_gui_set_text_color(RG_COLOR_WHITE);
@@ -306,25 +305,31 @@ void home_ui_draw(void) {
         home_ui.need_time_refresh = false;
     }
 
-    // [Goal 2] Only redraw the specific apps that are affected
+    // [Goal 2] Only redraw the specific apps that are affected, always drawing selected icon last!
     if (home_ui.force_all) {
         for (int i = 0; i < NUM_APPS; i++) {
-            draw_app_node(i);
-            home_ui.icon_dirty[i] = false;
-        }
-        home_ui.force_all = false;
-    } else {
-        int drawn = 0;
-        for (int i = 0; i < NUM_APPS; i++) {
-            if (home_ui.icon_dirty[i]) {
-                if (drawn >= 2) {
-                    home_ui.needs_redraw = true; // Defer to next frame to protect DMA buffers
-                    continue;
-                }
+            if (i != home_ui.selected) {
                 draw_app_node(i);
                 home_ui.icon_dirty[i] = false;
-                drawn++;
             }
+        }
+        draw_app_node(home_ui.selected);
+        home_ui.icon_dirty[home_ui.selected] = false;
+        home_ui.force_all = false;
+    } else {
+        bool unselected_drawn = false;
+        for (int i = 0; i < NUM_APPS; i++) {
+            if (i != home_ui.selected && home_ui.icon_dirty[i]) {
+                draw_app_node(i);
+                home_ui.icon_dirty[i] = false;
+                unselected_drawn = true;
+            }
+        }
+        // If any unselected icon redrew its 68x68 black bounding box, its corner may have overlapped
+        // the selected icon. Always redraw the selected icon on top if any unselected icon drew or if it is dirty.
+        if (unselected_drawn || home_ui.icon_dirty[home_ui.selected]) {
+            draw_app_node(home_ui.selected);
+            home_ui.icon_dirty[home_ui.selected] = false;
         }
     }
 

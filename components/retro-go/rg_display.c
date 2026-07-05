@@ -9,6 +9,7 @@
 #include "board_pins_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_rom_sys.h"
 
 /*
  * Display Driver — GoldenMorning 2.8" TFT LCD (ILI9341)
@@ -112,13 +113,12 @@ void rg_display_write(int x, int y, int width, int height, int stride, const voi
 
 void rg_display_drain(void)
 {
-    // Sending any tx_param command drains all in-flight queued DMA transactions
-    // (see panel_io_spi_tx_param in ESP-IDF: it calls spi_device_get_trans_result
-    // for every num_trans_inflight before proceeding).
-    // NOP command (0x00) is harmless to ILI9341.
-    if (io_handle) {
-        esp_lcd_panel_io_tx_param(io_handle, 0x00, NULL, 0);
-    }
+    // With trans_queue_depth = 1 and quad buffering, DMA transfers complete safely.
+    // Sending NOP command (0x00) over SPI after every primitive draw caused TFT controller
+    // driver glitches resulting in white screen flashes and flickering on redraws.
+    // Yielding 200us allows any in-flight SPI DMA bus transaction to finish cleanly
+    // without sending bogus commands to the display panel.
+    esp_rom_delay_us(200);
 }
 
 void rg_display_set_config(rg_display_config_t config)
