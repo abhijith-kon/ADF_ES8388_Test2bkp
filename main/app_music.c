@@ -121,6 +121,7 @@ static int info_channels = 2;
 static int info_bitrate = 320;
 static char info_format_str[16] = "MP3";
 static char info_artist_str[64] = "Unknown Artist";
+static char info_title_str[128] = "";
 
 // FFT visualizer simulation state (48 radial lines)
 #define NUM_FFT_BANDS 48
@@ -378,7 +379,7 @@ static void draw_mini_player(void)
 {
     // Track name with scrolling
     if (pipeline_has_run && current_track < total_tracks) {
-        const char *name = playlist[current_track];
+        const char *name = strlen(info_title_str) ? info_title_str : playlist[current_track];
         int name_len = strlen(name);
         int ofs = 0;
         if (name_len > MINI_MAX_NAME_CHARS) {
@@ -475,7 +476,7 @@ static void scroll_tick(void)
 static void draw_player_title(void)
 {
     if (current_track >= total_tracks) return;
-    const char *name = playlist[current_track];
+    const char *name = strlen(info_title_str) ? info_title_str : playlist[current_track];
     int name_len = strlen(name);
     int ofs = 0;
     if (name_len > 14) {
@@ -755,11 +756,20 @@ static void play_track(int index)
     }
 
     strcpy(info_artist_str, "Unknown Artist");
+    info_title_str[0] = '\0';
     const char *dash = strstr(playlist[index], " - ");
     if (dash && (dash - playlist[index] < sizeof(info_artist_str))) {
         int len = (int)(dash - playlist[index]);
         strncpy(info_artist_str, playlist[index], len);
         info_artist_str[len] = '\0';
+        const char *t_start = dash + 3;
+        int t_len = strlen(t_start);
+        const char *dot = strrchr(t_start, '.');
+        if (dot) t_len = (int)(dot - t_start);
+        if (t_len < sizeof(info_title_str)) {
+            strncpy(info_title_str, t_start, t_len);
+            info_title_str[t_len] = '\0';
+        }
     }
 
     // Check for embedded thumbnail (ID3v2 APIC) and Artist tag (TPE1 / Vorbis)
@@ -815,6 +825,35 @@ static void play_track(int index)
                                 }
                             }
                         }
+                        if (buf[i]=='T' && buf[i+1]=='I' && buf[i+2]=='T' && buf[i+3]=='2' && i + 11 < got) {
+                            uint32_t f_size = ((uint32_t)buf[i+4] << 24) | ((uint32_t)buf[i+5] << 16) | ((uint32_t)buf[i+6] << 8) | buf[i+7];
+                            if (hdr[3] == 4) {
+                                f_size = ((uint32_t)(buf[i+4] & 0x7F) << 21) | ((uint32_t)(buf[i+5] & 0x7F) << 14) | ((uint32_t)(buf[i+6] & 0x7F) << 7) | (uint32_t)(buf[i+7] & 0x7F);
+                            }
+                            if (f_size > 1 && i + 10 + f_size <= got && f_size < 128) {
+                                uint8_t enc = buf[i+10];
+                                int out_idx = 0;
+                                if (enc == 0 || enc == 3) {
+                                    for (uint32_t k = 1; k < f_size && out_idx < 120; k++) {
+                                        char c = (char)buf[i + 10 + k];
+                                        if (c == '\0') break;
+                                        if ((unsigned char)c >= 32) info_title_str[out_idx++] = c;
+                                    }
+                                } else if (enc == 1 || enc == 2) {
+                                    uint32_t start_k = (enc == 1 && f_size >= 3) ? 3 : 1;
+                                    for (uint32_t k = start_k; k + 1 < f_size && out_idx < 120; k += 2) {
+                                        char c = (char)buf[i + 10 + (enc == 2 ? k + 1 : k)];
+                                        if (c == '\0' && buf[i + 10 + k + 1] == '\0') break;
+                                        if ((unsigned char)c >= 32 && buf[i + 10 + (enc == 2 ? k : k + 1)] == 0) {
+                                            info_title_str[out_idx++] = c;
+                                        }
+                                    }
+                                }
+                                if (out_idx > 0) {
+                                    info_title_str[out_idx] = '\0';
+                                }
+                            }
+                        }
                     }
                     if (strcmp(info_artist_str, "Unknown Artist") == 0) {
                         for (size_t i = 0; i + 7 < got; i++) {
@@ -830,15 +869,30 @@ static void play_track(int index)
                             }
                         }
                     }
+                    if (info_title_str[0] == '\0') {
+                        for (size_t i = 0; i + 6 < got; i++) {
+                            if (strncasecmp((const char *)&buf[i], "title=", 6) == 0) {
+                                int out_idx = 0;
+                                for (size_t k = i + 6; k < got && out_idx < 120; k++) {
+                                    char c = (char)buf[k];
+                                    if (c < 32 || c == 0 || c == 0xFF) break;
+                                    info_title_str[out_idx++] = c;
+                                }
+                                if (out_idx > 0) info_title_str[out_idx] = '\0';
+                                break;
+                            }
+                        }
+                    }
                     free(buf);
                 }
             }
             fclose(f);
-            ESP_LOGI(TAG, "Thumbnail: ID3=%s, APIC=%s, ID3size=%lu, Artist='%s'",
+            ESP_LOGI(TAG, "Thumbnail: ID3=%s, APIC=%s, ID3size=%lu, Artist='%s', Title='%s'",
                      has_id3 ? "YES" : "NO",
                      has_apic ? "YES" : "NO",
                      (unsigned long)id3_size,
-                     info_artist_str);
+                     info_artist_str,
+                     info_title_str);
         }
     }
 
@@ -1123,7 +1177,7 @@ void app_music_tick(void)
             draw_player_timer();
         }
         if (current_track < total_tracks) {
-            const char *name = playlist[current_track];
+            const char *name = strlen(info_title_str) ? info_title_str : playlist[current_track];
             int name_len = strlen(name);
             if (name_len > 14) {
                 if (now_ms - player_scroll_timer >= 150) {
@@ -1149,7 +1203,7 @@ void app_music_tick(void)
 
     // 2b. Mini player track name scrolling
     if (pipeline_has_run && current_track < total_tracks) {
-        const char *mname = playlist[current_track];
+        const char *mname = strlen(info_title_str) ? info_title_str : playlist[current_track];
         int mlen = strlen(mname);
         if (mlen > MINI_MAX_NAME_CHARS) {
             int64_t mnow = esp_timer_get_time() / 1000;
@@ -1200,7 +1254,7 @@ void app_music_tick(void)
     } else if (mini_player_scroll_dirty) {
         // Only redraw the track name line for scroll updates
         if (pipeline_has_run && current_track < total_tracks) {
-            const char *sname = playlist[current_track];
+            const char *sname = strlen(info_title_str) ? info_title_str : playlist[current_track];
             int slen = strlen(sname);
             int ofs = mini_scroll_char_offset;
             int max_ofs = slen - MINI_MAX_NAME_CHARS;
