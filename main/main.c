@@ -108,7 +108,7 @@ void app_main(void)
             }
         } 
         else if (current_app == APP_MUSIC) {
-            if (event == BTN_ESCAPE || event == BTN_B) {
+            if ((event == BTN_ESCAPE || event == BTN_B) && !app_music_is_in_player_ui()) {
                 app_music_stop();
                 current_app = APP_HOME;
                 // Drain any in-flight DMA from music app before clearing

@@ -9,5 +9,6 @@ void app_music_start(void);
 void app_music_stop(void);
 void app_music_handle_input(button_event_t event);
 void app_music_tick(void);
+bool app_music_is_in_player_ui(void);
 
 #endif

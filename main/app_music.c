@@ -11,13 +11,20 @@
 #include "audio_pipeline.h"
 #include "fatfs_stream.h"
 #include "i2s_stream.h"
+#include "esp_decoder.h"
 #include "mp3_decoder.h"
+#include "flac_decoder.h"
+#include "aac_decoder.h"
+#include "wav_decoder.h"
 #include "audio_event_iface.h"
 #include "rg_gui.h"
 #include "rg_display.h"
 #include "es8388.h"
 #include "audio_volume.h"
 #include <stdio.h>
+#include <math.h>
+#include "esp_heap_caps.h"
+#include "esp_random.h"
 
 static const char *TAG = "APP_MUSIC";
 
@@ -95,7 +102,105 @@ static int64_t mini_scroll_timer = 0;
 #define MINI_MAX_NAME_CHARS     27
 static bool mini_player_scroll_dirty = false;
 
+// ---- Player UI State & Visualizer ----
+static bool in_player_ui = false;
+static bool player_ui_top_dirty = false;
+static int player_scroll_char_offset = 0;
+static int64_t player_scroll_timer = 0;
+static int64_t last_vis_time = 0;
+static int64_t last_time_update = 0;
+
+// Volume bar state
+static bool vol_bar_visible = false;
+static int64_t vol_bar_timer = 0;
+
+// Audio format info
+static int info_sample_rate = 44100;
+static int info_bits = 16;
+static int info_channels = 2;
+static int info_bitrate = 320;
+static char info_format_str[16] = "MP3";
+
+// FFT visualizer simulation state
+static float fft_val[32] = {0};
+static float fft_vel[32] = {0};
+static float fft_freq[32] = {0};
+static float fft_phase[32] = {0};
+static bool fft_init = false;
+static uint16_t *vis_buf = NULL;
+
 static void init_audio_pipeline(void);
+static void draw_player_ui_full(void);
+static void draw_player_top_area(bool full_redraw);
+static void draw_player_visualizer(void);
+static void draw_volume_bar(void);
+static float get_playback_progress(void);
+
+static void init_fft_state(void)
+{
+    if (fft_init) return;
+    for (int i = 0; i < 32; i++) {
+        fft_val[i] = 2.0f;
+        fft_vel[i] = 0.0f;
+        fft_freq[i] = 1.5f + (float)(esp_random() % 30) * 0.1f;
+        fft_phase[i] = (float)(esp_random() % 628) * 0.01f;
+    }
+    fft_init = true;
+}
+
+static uint16_t get_rainbow_color(int i, int total)
+{
+    float angle = (float)i / (float)total * 6.2831853f;
+    int r = (int)(127.0f * sinf(angle) + 128.0f);
+    int g = (int)(127.0f * sinf(angle + 2.094395f) + 128.0f);
+    int b = (int)(127.0f * sinf(angle + 4.188790f) + 128.0f);
+    if (r < 0) r = 0;
+    if (r > 255) r = 255;
+    if (g < 0) g = 0;
+    if (g > 255) g = 255;
+    if (b < 0) b = 0;
+    if (b > 255) b = 255;
+    return RG_COLOR_RGB(r, g, b);
+}
+
+static void draw_line_in_buf(uint16_t *buf, int w, int h, int x0, int y0, int x1, int y1, uint16_t color)
+{
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy, e2;
+    uint16_t color_sw = (uint16_t)((color >> 8) | (color << 8));
+
+    while (1) {
+        if (x0 >= 0 && x0 < w && y0 >= 0 && y0 < h) {
+            buf[y0 * w + x0] = color_sw;
+        }
+        if (x0 == x1 && y0 == y1) break;
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+static bool is_supported_audio_file(const char *name)
+{
+    size_t len = strlen(name);
+    if (len > 4) {
+        const char *ext = name + len - 4;
+        if (strcasecmp(ext, ".mp3") == 0 ||
+            strcasecmp(ext, ".wav") == 0 ||
+            strcasecmp(ext, ".aac") == 0 ||
+            strcasecmp(ext, ".m4a") == 0) {
+            return true;
+        }
+    }
+    if (len > 5) {
+        const char *ext = name + len - 5;
+        if (strcasecmp(ext, ".flac") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 static void sd_card_scan_task(void *arg)
 {
@@ -109,8 +214,7 @@ static void sd_card_scan_task(void *arg)
     }
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
-        size_t len = strlen(ent->d_name);
-        if (len > 4 && strcasecmp(ent->d_name + len - 4, ".mp3") == 0) {
+        if (is_supported_audio_file(ent->d_name)) {
             if (playlist_mutex) xSemaphoreTake(playlist_mutex, portMAX_DELAY);
             if (total_tracks < MAX_PLAYLIST_FILES) {
                 playlist[total_tracks] = strdup(ent->d_name);
@@ -131,7 +235,7 @@ static void sd_card_scan_task(void *arg)
         }
     }
     closedir(dir);
-    ESP_LOGI(TAG, "Background scan finished. Total MP3 tracks found: %d", total_tracks);
+    ESP_LOGI(TAG, "Background scan finished. Total audio tracks found: %d", total_tracks);
     scan_in_progress = false;
     vTaskDelete(NULL);
 }
@@ -139,7 +243,7 @@ static void sd_card_scan_task(void *arg)
 // ---- Audio Pipeline Init ----
 static void init_audio_pipeline(void)
 {
-    ESP_LOGI(TAG, "Initializing Audio Pipeline...");
+    ESP_LOGI(TAG, "Initializing Audio Pipeline with Auto-Decoder (MP3, FLAC, AAC, WAV, M4A)...");
     audio_pipeline_cfg_t pipeline_cfg = DEFAULT_AUDIO_PIPELINE_CONFIG();
     pipeline = audio_pipeline_init(&pipeline_cfg);
 
@@ -155,14 +259,21 @@ static void init_audio_pipeline(void)
     i2s_cfg.chan_cfg.dma_frame_num = 480;
     i2s_stream_writer = i2s_stream_init(&i2s_cfg);
 
-    mp3_decoder_cfg_t mp3_cfg = DEFAULT_MP3_DECODER_CONFIG();
-    mp3_decoder = mp3_decoder_init(&mp3_cfg);
+    audio_decoder_t auto_decode[] = {
+        DEFAULT_ESP_MP3_DECODER_CONFIG(),
+        DEFAULT_ESP_FLAC_DECODER_CONFIG(),
+        DEFAULT_ESP_AAC_DECODER_CONFIG(),
+        DEFAULT_ESP_WAV_DECODER_CONFIG(),
+        DEFAULT_ESP_M4A_DECODER_CONFIG(),
+    };
+    esp_decoder_cfg_t auto_dec_cfg = DEFAULT_ESP_DECODER_CONFIG();
+    mp3_decoder = esp_decoder_init(&auto_dec_cfg, auto_decode, sizeof(auto_decode) / sizeof(auto_decode[0]));
 
     audio_pipeline_register(pipeline, fatfs_stream_reader, "file");
-    audio_pipeline_register(pipeline, mp3_decoder, "mp3");
+    audio_pipeline_register(pipeline, mp3_decoder, "dec");
     audio_pipeline_register(pipeline, i2s_stream_writer, "i2s");
 
-    const char *link_tag[3] = {"file", "mp3", "i2s"};
+    const char *link_tag[3] = {"file", "dec", "i2s"};
     audio_pipeline_link(pipeline, &link_tag[0], 3);
 
     audio_event_iface_cfg_t evt_cfg = AUDIO_EVENT_IFACE_DEFAULT_CFG();
@@ -355,6 +466,214 @@ static void scroll_tick(void)
     }
 }
 
+// ---- Player UI Drawing Functions ----
+static void draw_player_top_area(bool full_redraw)
+{
+    if (full_redraw) {
+        rg_gui_draw_rect(0, 0, SCREEN_W, 123, MUSIC_BG);
+    }
+    rg_gui_set_font_size(8);
+    rg_gui_draw_text_center(SCREEN_W / 2, 6, "--- NOW PLAYING ---");
+
+    if (current_track < total_tracks) {
+        const char *name = playlist[current_track];
+        int name_len = strlen(name);
+        int ofs = 0;
+        if (name_len > 14) {
+            ofs = player_scroll_char_offset;
+            int max_ofs = name_len - 14;
+            if (ofs > max_ofs) ofs = max_ofs;
+        }
+        char display[64];
+        snprintf(display, sizeof(display), " %s ", name + ofs);
+        rg_gui_set_font_size(16);
+        rg_gui_draw_text_line(0, 26, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, 4);
+    }
+
+    rg_gui_set_font_size(8);
+    rg_gui_draw_text_center(SCREEN_W / 2, 56, "Artist: ES8388 Audio Player");
+
+    char fmt_str[64];
+    snprintf(fmt_str, sizeof(fmt_str), "%s   |   %d.%d kHz   |   %d kbps",
+             info_format_str,
+             info_sample_rate / 1000,
+             (info_sample_rate % 1000) / 100,
+             info_bitrate);
+    rg_gui_draw_text_center(SCREEN_W / 2, 76, fmt_str);
+
+    float prog = get_playback_progress();
+    int total_sec = 0;
+    if (info_bitrate > 0 && current_track_bytes > 0) {
+        total_sec = (int)((current_track_bytes * 8) / (info_bitrate * 1000));
+    } else if (info_sample_rate > 0 && info_channels > 0 && info_bits > 0 && strcmp(info_format_str, "WAV") == 0 && current_track_bytes > 0) {
+        total_sec = (int)(current_track_bytes / (info_sample_rate * info_channels * (info_bits / 8)));
+    }
+    int cur_sec = (int)(prog * total_sec);
+    char time_str[32];
+    snprintf(time_str, sizeof(time_str), "%02d:%02d / %02d:%02d",
+             cur_sec / 60, cur_sec % 60, total_sec / 60, total_sec % 60);
+    rg_gui_draw_text_center(SCREEN_W / 2, 98, time_str);
+
+    if (full_redraw) {
+        rg_gui_draw_rect(0, 124, SCREEN_W, 1, SEP_COLOR);
+    }
+}
+
+static void draw_volume_bar(void)
+{
+    rg_gui_draw_rect(222, 140, 10, 160, RG_COLOR_RGB(80, 180, 255));
+    int interior_h = 158;
+    int fill_h = (current_volume * interior_h) / 100;
+    if (fill_h < 0) fill_h = 0;
+    if (fill_h > interior_h) fill_h = interior_h;
+    int empty_h = interior_h - fill_h;
+
+    if (empty_h > 0) {
+        rg_gui_draw_rect(223, 141, 8, empty_h, RG_COLOR_RGB(20, 20, 30));
+    }
+    if (fill_h > 0) {
+        rg_gui_draw_rect(223, 141 + empty_h, 8, fill_h, RG_COLOR_RGB(0, 230, 180));
+    }
+}
+
+static void draw_player_visualizer(void)
+{
+    if (!vis_buf) return;
+    init_fft_state();
+
+    int box_s = 180;
+    int c = 90;
+    uint16_t bg_sw = (uint16_t)((MUSIC_BG >> 8) | (MUSIC_BG << 8));
+    for (int i = 0; i < box_s * box_s; i++) vis_buf[i] = bg_sw;
+
+    int64_t now_us = esp_timer_get_time();
+    float t_sec = (float)(now_us / 1000) * 0.005f;
+
+    for (int i = 0; i < 32; i++) {
+        if (is_playing) {
+            float base_sin = sinf(t_sec * fft_freq[i] + fft_phase[i]);
+            float target = (base_sin * 0.5f + 0.5f) * 38.0f + 3.0f;
+            if ((esp_random() % 100) < 12) {
+                target += (float)(esp_random() % 20);
+            }
+            if (target > 48.0f) target = 48.0f;
+            if (target > fft_val[i]) {
+                fft_val[i] = target;
+                fft_vel[i] = 2.0f;
+            } else {
+                fft_vel[i] -= 1.5f;
+                fft_val[i] += fft_vel[i];
+                if (fft_val[i] < 2.0f) {
+                    fft_val[i] = 2.0f;
+                    fft_vel[i] = 0.0f;
+                }
+            }
+        } else {
+            fft_vel[i] -= 1.5f;
+            fft_val[i] += fft_vel[i];
+            if (fft_val[i] < 2.0f) {
+                fft_val[i] = 2.0f;
+                fft_vel[i] = 0.0f;
+            }
+        }
+
+        float theta = i * (2.0f * 3.14159265f / 32.0f) - 1.5707963f;
+        float cos_t = cosf(theta);
+        float sin_t = sinf(theta);
+        int r_start = 32;
+        int r_end = 32 + (int)fft_val[i];
+        if (r_end > 86) r_end = 86;
+
+        int x0 = c + (int)(r_start * cos_t);
+        int y0 = c + (int)(r_start * sin_t);
+        int x1 = c + (int)(r_end * cos_t);
+        int y1 = c + (int)(r_end * sin_t);
+
+        uint16_t col = get_rainbow_color(i, 32);
+        draw_line_in_buf(vis_buf, box_s, box_s, x0, y0, x1, y1, col);
+        int ox = (int)(-sin_t * 1.0f);
+        int oy = (int)(cos_t * 1.0f);
+        draw_line_in_buf(vis_buf, box_s, box_s, x0 + ox, y0 + oy, x1 + ox, y1 + oy, col);
+        draw_line_in_buf(vis_buf, box_s, box_s, x0 - ox, y0 - oy, x1 - ox, y1 - oy, col);
+    }
+
+    float pulse = sinf(t_sec) * 0.5f + 0.5f;
+    int core_r = 13 + (int)(11.0f * pulse);
+    for (int y = c - core_r; y <= c + core_r; y++) {
+        for (int x = c - core_r; x <= c + core_r; x++) {
+            int dx = x - c, dy = y - c;
+            int r2 = dx * dx + dy * dy;
+            if (r2 <= core_r * core_r && r2 < 26 * 26) {
+                int dist = (int)sqrtf((float)r2);
+                int r_col = (int)(20 + 40 * pulse * (1.0f - (float)dist / core_r));
+                int g_col = (int)(10 + 30 * pulse * (1.0f - (float)dist / core_r));
+                int b_col = (int)(50 + 100 * pulse * (1.0f - (float)dist / core_r));
+                uint16_t col = RG_COLOR_RGB(r_col, g_col, b_col);
+                vis_buf[y * box_s + x] = (uint16_t)((col >> 8) | (col << 8));
+            }
+        }
+    }
+
+    float prog = get_playback_progress();
+    for (int y = c - 30; y <= c + 30; y++) {
+        for (int x = c - 30; x <= c + 30; x++) {
+            int dx = x - c, dy = y - c;
+            int r2 = dx * dx + dy * dy;
+            if (r2 >= 27 * 27 && r2 <= 30 * 30) {
+                float ang = atan2f((float)dy, (float)dx) + 1.5707963f;
+                if (ang < 0.0f) ang += 6.2831853f;
+                float norm_ang = ang / 6.2831853f;
+                if (norm_ang <= prog) {
+                    uint16_t col = RG_COLOR_RGB(0, 230, 180);
+                    vis_buf[y * box_s + x] = (uint16_t)((col >> 8) | (col << 8));
+                } else {
+                    uint16_t col = RG_COLOR_RGB(40, 40, 50);
+                    vis_buf[y * box_s + x] = (uint16_t)((col >> 8) | (col << 8));
+                }
+            }
+        }
+    }
+
+    uint16_t icon_sw = (uint16_t)((RG_COLOR_WHITE >> 8) | (RG_COLOR_WHITE << 8));
+    uint16_t pause_sw = (uint16_t)((PAUSED_CLR >> 8) | (PAUSED_CLR << 8));
+    if (is_playing) {
+        for (int py = -7; py <= 7; py++) {
+            int max_px = 6 - (abs(py) * 11) / 7;
+            for (int px = -5; px <= max_px; px++) {
+                vis_buf[(c + py) * box_s + (c + px)] = icon_sw;
+            }
+        }
+    } else {
+        for (int py = -6; py <= 6; py++) {
+            for (int px = -5; px <= -2; px++) {
+                vis_buf[(c + py) * box_s + (c + px)] = pause_sw;
+            }
+            for (int px = 2; px <= 5; px++) {
+                vis_buf[(c + py) * box_s + (c + px)] = pause_sw;
+            }
+        }
+    }
+
+    rg_display_write(30, 134, box_s, box_s, box_s * 2, vis_buf);
+    rg_display_drain();
+}
+
+static void draw_player_ui_full(void)
+{
+    if (!vis_buf) {
+        vis_buf = heap_caps_malloc(180 * 180 * sizeof(uint16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!vis_buf) vis_buf = malloc(180 * 180 * sizeof(uint16_t));
+    }
+    rg_gui_clear(MUSIC_BG);
+    rg_display_drain();
+    player_ui_top_dirty = true;
+    draw_player_top_area(true);
+    draw_player_visualizer();
+    if (vol_bar_visible) {
+        draw_volume_bar();
+    }
+}
+
 // ---- Play Track ----
 static void play_track(int index)
 {
@@ -377,6 +696,16 @@ static void play_track(int index)
 
     audio_element_set_uri(fatfs_stream_reader, path);
     ESP_LOGI(TAG, "Playing Track [%d/%d]: %s", index + 1, total_tracks, playlist[index]);
+
+    const char *ext = strrchr(playlist[index], '.');
+    if (ext) {
+        if (strcasecmp(ext, ".flac") == 0) strcpy(info_format_str, "FLAC");
+        else if (strcasecmp(ext, ".wav") == 0) strcpy(info_format_str, "WAV");
+        else if (strcasecmp(ext, ".aac") == 0 || strcasecmp(ext, ".m4a") == 0) strcpy(info_format_str, "AAC");
+        else strcpy(info_format_str, "MP3");
+    } else {
+        strcpy(info_format_str, "MP3");
+    }
 
     // Check for embedded thumbnail (ID3v2 APIC frame) and log to serial
     {
@@ -436,6 +765,7 @@ void app_music_init(audio_hal_handle_t hal_handle)
 void app_music_start(void)
 {
     ESP_LOGI(TAG, "Music App Started");
+    in_player_ui = false;
     if (!music_initialized) {
         if (!playlist_mutex) {
             playlist_mutex = xSemaphoreCreateMutex();
@@ -461,6 +791,11 @@ void app_music_start(void)
 void app_music_stop(void)
 {
     ESP_LOGI(TAG, "Music App Stopped");
+    in_player_ui = false;
+    if (vis_buf) {
+        free(vis_buf);
+        vis_buf = NULL;
+    }
     if (pipeline && pipeline_has_run) {
         audio_pipeline_stop(pipeline);
         audio_pipeline_wait_for_stop(pipeline);
@@ -476,7 +811,15 @@ void app_music_handle_input(button_event_t event)
 {
     switch (event) {
         case BTN_UP:
-            if (total_tracks > 0) {
+            if (in_player_ui) {
+                current_volume = (current_volume + 5 > 100) ? 100 : current_volume + 5;
+                uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
+                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
+                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
+                vol_bar_visible = true;
+                vol_bar_timer = esp_timer_get_time() / 1000;
+                draw_volume_bar();
+            } else if (total_tracks > 0) {
                 int old_vs = view_start;
                 prev_selected = selected_index;
                 selected_index = (selected_index - 1 + total_tracks) % total_tracks;
@@ -494,7 +837,15 @@ void app_music_handle_input(button_event_t event)
             }
             break;
         case BTN_DOWN:
-            if (total_tracks > 0) {
+            if (in_player_ui) {
+                current_volume = (current_volume - 5 < 0) ? 0 : current_volume - 5;
+                uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
+                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
+                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
+                vol_bar_visible = true;
+                vol_bar_timer = esp_timer_get_time() / 1000;
+                draw_volume_bar();
+            } else if (total_tracks > 0) {
                 int old_vs2 = view_start;
                 prev_selected = selected_index;
                 selected_index = (selected_index + 1) % total_tracks;
@@ -519,6 +870,11 @@ void app_music_handle_input(button_event_t event)
                 ensure_cursor_visible();
                 scroll_char_offset = 0;
                 scroll_timer = esp_timer_get_time() / 1000;
+                if (in_player_ui) {
+                    player_scroll_char_offset = 0;
+                    player_scroll_timer = esp_timer_get_time() / 1000;
+                    draw_player_ui_full();
+                }
             }
             break;
         case BTN_RIGHT:
@@ -529,36 +885,62 @@ void app_music_handle_input(button_event_t event)
                 ensure_cursor_visible();
                 scroll_char_offset = 0;
                 scroll_timer = esp_timer_get_time() / 1000;
+                if (in_player_ui) {
+                    player_scroll_char_offset = 0;
+                    player_scroll_timer = esp_timer_get_time() / 1000;
+                    draw_player_ui_full();
+                }
             }
             break;
         case BTN_ENTER:
         case BTN_A:
             if (total_tracks > 0) {
-                if (selected_index == current_track && is_playing) {
-                    audio_pipeline_pause(pipeline);
-                    is_playing = false;
-                    list_full_dirty = true;
-                    player_dirty = true;
-                } else if (selected_index == current_track && !is_playing && pipeline_has_run) {
-                    audio_pipeline_resume(pipeline);
-                    is_playing = true;
-                    list_full_dirty = true;
-                    player_dirty = true;
+                if (in_player_ui) {
+                    if (is_playing) {
+                        audio_pipeline_pause(pipeline);
+                        is_playing = false;
+                    } else if (pipeline_has_run) {
+                        audio_pipeline_resume(pipeline);
+                        is_playing = true;
+                    }
+                    draw_player_visualizer();
                 } else {
-                    play_track(selected_index);
+                    if (selected_index == current_track && is_playing) {
+                        // Already playing, just open player ui
+                    } else if (selected_index == current_track && !is_playing && pipeline_has_run) {
+                        audio_pipeline_resume(pipeline);
+                        is_playing = true;
+                    } else {
+                        play_track(selected_index);
+                    }
+                    in_player_ui = true;
+                    player_scroll_char_offset = 0;
+                    player_scroll_timer = esp_timer_get_time() / 1000;
+                    draw_player_ui_full();
                 }
+            }
+            break;
+        case BTN_ESCAPE:
+        case BTN_B:
+            if (in_player_ui) {
+                in_player_ui = false;
+                list_full_dirty = true;
+                player_dirty = true;
+                draw_music_full_ui();
             }
             break;
         case BTN_VOL_UP:
             {
                 current_volume = (current_volume + 5 > 100) ? 100 : current_volume + 5;
-                // Bypass audio_hal_set_volume to avoid legacy/new I2C driver conflict (NACK bug).
-                // Write ES8388 DAC volume registers directly.
-                // ES8388 volume range: 0x00 = 0dB, 0xC0 = -96dB. Map 0-100 linearly.
                 uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
                 es8388_write_reg(ES8388_DACCONTROL4, reg_val);
                 es8388_write_reg(ES8388_DACCONTROL5, reg_val);
                 ESP_LOGI(TAG, "Volume: %d (reg=0x%02x)", current_volume, reg_val);
+                if (in_player_ui) {
+                    vol_bar_visible = true;
+                    vol_bar_timer = esp_timer_get_time() / 1000;
+                    draw_volume_bar();
+                }
             }
             break;
         case BTN_VOL_DOWN:
@@ -568,6 +950,11 @@ void app_music_handle_input(button_event_t event)
                 es8388_write_reg(ES8388_DACCONTROL4, reg_val);
                 es8388_write_reg(ES8388_DACCONTROL5, reg_val);
                 ESP_LOGI(TAG, "Volume: %d (reg=0x%02x)", current_volume, reg_val);
+                if (in_player_ui) {
+                    vol_bar_visible = true;
+                    vol_bar_timer = esp_timer_get_time() / 1000;
+                    draw_volume_bar();
+                }
             }
             break;
         default:
@@ -592,6 +979,21 @@ void app_music_tick(void)
                 audio_element_getinfo(mp3_decoder, &music_info);
                 i2s_stream_set_clk(i2s_stream_writer, music_info.sample_rates,
                                    music_info.bits, music_info.channels);
+                info_sample_rate = music_info.sample_rates;
+                info_bits = music_info.bits;
+                info_channels = music_info.channels;
+                if (music_info.bps > 0) {
+                    info_bitrate = music_info.bps / 1000;
+                } else if (strcmp(info_format_str, "FLAC") == 0) {
+                    info_bitrate = 850;
+                } else if (strcmp(info_format_str, "WAV") == 0) {
+                    info_bitrate = (info_sample_rate * info_bits * info_channels) / 1000;
+                } else {
+                    info_bitrate = 320;
+                }
+                if (in_player_ui) {
+                    draw_player_top_area(false);
+                }
             }
             if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT
                 && msg.source == (void *)i2s_stream_writer
@@ -602,8 +1004,46 @@ void app_music_tick(void)
                 selected_index = current_track;
                 ensure_cursor_visible();
                 scroll_char_offset = 0;
+                if (in_player_ui) {
+                    player_scroll_char_offset = 0;
+                    player_scroll_timer = esp_timer_get_time() / 1000;
+                    draw_player_ui_full();
+                }
             }
         }
+    }
+
+    // If in Player UI, handle visualizer, time updates, title scrolling, volume bar
+    if (in_player_ui) {
+        int64_t now_ms = esp_timer_get_time() / 1000;
+        if (now_ms - last_vis_time >= 40) {
+            last_vis_time = now_ms;
+            draw_player_visualizer();
+        }
+        if (is_playing && now_ms - last_time_update >= 500) {
+            last_time_update = now_ms;
+            draw_player_top_area(false);
+        }
+        if (current_track < total_tracks) {
+            const char *name = playlist[current_track];
+            int name_len = strlen(name);
+            if (name_len > 14) {
+                if (now_ms - player_scroll_timer >= 200) {
+                    player_scroll_timer = now_ms;
+                    player_scroll_char_offset++;
+                    int max_ofs = name_len - 14;
+                    if (player_scroll_char_offset > max_ofs + 4) {
+                        player_scroll_char_offset = 0;
+                    }
+                    draw_player_top_area(false);
+                }
+            }
+        }
+        if (vol_bar_visible && (now_ms - vol_bar_timer >= 3000)) {
+            vol_bar_visible = false;
+            rg_gui_draw_rect(222, 140, 10, 160, MUSIC_BG);
+        }
+        return;
     }
 
     // 2. Text scrolling for selected item
@@ -686,4 +1126,9 @@ void app_music_tick(void)
             progress_timer = now;
         }
     }
+}
+
+bool app_music_is_in_player_ui(void)
+{
+    return in_player_ui;
 }
