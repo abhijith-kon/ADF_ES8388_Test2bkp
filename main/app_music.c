@@ -123,6 +123,8 @@ static int info_bitrate = 320;
 static char info_format_str[16] = "MP3";
 static char info_artist_str[64] = "Unknown Artist";
 static char info_title_str[128] = "";
+static int64_t saved_byte_pos = 0;
+static bool is_shuffle = false;
 
 // FFT visualizer state (48 radial lines)
 #define NUM_FFT_BANDS 48
@@ -460,7 +462,7 @@ static void draw_music_full_ui(void)
     // Title
     rg_gui_set_font_size(16);
     rg_gui_set_text_color(RG_COLOR_WHITE);
-    rg_gui_draw_text_box(0, TITLE_Y, SCREEN_W, TITLE_H, MUSIC_BG, "MUSIC PLAYER");
+    rg_gui_draw_text_box(0, TITLE_Y, SCREEN_W, TITLE_H, MUSIC_BG, is_shuffle ? "MUSIC [SHUFFLE]" : "MUSIC PLAYER");
 
     // Separator below title
     rg_gui_draw_rect(0, SEP1_Y, SCREEN_W, 1, SEP_COLOR);
@@ -499,8 +501,7 @@ static void scroll_tick(void)
     if (now - scroll_timer >= SCROLL_INTERVAL_MS) {
         scroll_timer = now;
         scroll_char_offset++;
-        int max_ofs = name_len - MAX_NAME_CHARS;
-        if (scroll_char_offset > max_ofs + 4) {
+        if (scroll_char_offset > name_len - MAX_NAME_CHARS + 3) {
             scroll_char_offset = 0;
         }
         scroll_only_dirty = true;
@@ -524,7 +525,7 @@ static void draw_player_title(void)
     
     rg_gui_draw_rect(0, 16, SCREEN_W, 24, MUSIC_BG);
     rg_gui_set_font_size(16);
-    rg_gui_draw_text_line(0, 16, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, 4);
+    rg_gui_draw_text_center(SCREEN_W / 2, 20, display);
 }
 
 static int artist_scroll = 0;
@@ -533,75 +534,41 @@ static int64_t artist_scroll_timer = 0;
 static void draw_player_metadata(void)
 {
     char fmt_str[64];
-
-    snprintf(fmt_str,
-             sizeof(fmt_str),
-             "%s | %d.%01d kHz | %d kbps",
+    snprintf(fmt_str, sizeof(fmt_str), "%s | %d.%01d kHz | %d kbps",
              info_format_str,
              info_sample_rate / 1000,
              (info_sample_rate % 1000) / 100,
              info_bitrate);
 
     const char *artist = info_artist_str;
-
     int len = strlen(artist);
-
     if (len > 30) {
-
         int max = len - 30;
-
         if (artist_scroll > max)
             artist_scroll = 0;
-
         artist += artist_scroll;
     }
 
     char display[80];
+    snprintf(display, sizeof(display), " %s", artist);
 
-    snprintf(display,sizeof(display)," %s",artist);
-
-    rg_gui_draw_rect(0,50,SCREEN_W,16,MUSIC_BG);
-
+    rg_gui_draw_rect(0, 50, SCREEN_W, 16, MUSIC_BG);
     rg_gui_set_font_size(8);
+    rg_gui_draw_text_line(0, 50, SCREEN_W, 16, MUSIC_BG, RG_COLOR_RGB(200, 200, 210), display, 8);
 
-    rg_gui_draw_text_line(
-            0,
-            50,
-            SCREEN_W,
-            16,
-            MUSIC_BG,
-            RG_COLOR_WHITE,
-            display,
-            4);
-
-    rg_gui_draw_rect(0,72,SCREEN_W,16,MUSIC_BG);
-
-    rg_gui_set_font_size(8);
-
-    rg_gui_draw_text_line(
-            0,
-            72,
-            SCREEN_W,
-            16,
-            MUSIC_BG,
-            RG_COLOR_WHITE,
-            fmt_str,
-            4);
+    rg_gui_draw_rect(0, 72, SCREEN_W, 16, MUSIC_BG);
+    rg_gui_draw_text_center(SCREEN_W / 2, 72, fmt_str);
 }
 
 static void draw_player_timer(void)
 {
+    if (!fatfs_stream_reader || current_track_bytes == 0) return;
     float prog = get_playback_progress();
-    int total_sec = 0;
-    if (info_bitrate > 0 && current_track_bytes > 0) {
-        total_sec = (int)((current_track_bytes * 8) / (info_bitrate * 1000));
-    } else if (info_sample_rate > 0 && info_channels > 0 && info_bits > 0 && strcmp(info_format_str, "WAV") == 0 && current_track_bytes > 0) {
-        total_sec = (int)(current_track_bytes / (info_sample_rate * info_channels * (info_bits / 8)));
-    }
-    int cur_sec = (int)(prog * total_sec);
+    int tot_sec = (info_bitrate > 0) ? (int)((current_track_bytes * 8ULL) / (info_bitrate * 1000ULL)) : 0;
+    int cur_sec = (int)(prog * tot_sec);
     char time_str[32];
     snprintf(time_str, sizeof(time_str), "%02d:%02d / %02d:%02d",
-             cur_sec / 60, cur_sec % 60, total_sec / 60, total_sec % 60);
+             cur_sec / 60, cur_sec % 60, tot_sec / 60, tot_sec % 60);
 
     rg_gui_draw_rect(0, 90, SCREEN_W, 20, MUSIC_BG);
     rg_gui_set_font_size(8);
@@ -613,6 +580,13 @@ static void draw_player_top_area(bool full_redraw)
     if (full_redraw) {
         rg_gui_draw_rect(0, 0, SCREEN_W, 123, MUSIC_BG);
         rg_gui_draw_rect(0, 124, SCREEN_W, 1, SEP_COLOR);
+    }
+    rg_gui_draw_rect(0, 0, SCREEN_W, 14, MUSIC_BG);
+    rg_gui_set_font_size(8);
+    if (is_shuffle) {
+        rg_gui_draw_text_center(SCREEN_W / 2, 4, "SHUFFLE ON");
+    } else {
+        rg_gui_draw_text_center(SCREEN_W / 2, 4, "NOW PLAYING");
     }
     draw_player_title();
     draw_player_metadata();
@@ -705,12 +679,16 @@ static void draw_player_visualizer(void)
     if (is_playing && fft_ringbuf) {
         static int log_cnt = 0;
         int avail = rb_bytes_filled(fft_ringbuf);
-        if (++log_cnt % 50 == 1) {
-            ESP_LOGI(TAG, "FFT rb filled = %d", avail);
-        }
         if (avail > 0) {
             if (avail > (int)sizeof(pcm_read_buf)) avail = (int)sizeof(pcm_read_buf);
             int bytes_read = rb_read(fft_ringbuf, (char*)pcm_read_buf, avail, 0);
+            if (++log_cnt % 40 == 1) {
+                ESP_LOGI(TAG,
+                         "FFT avail=%d read=%d channels=%d",
+                         avail,
+                         bytes_read,
+                         info_channels);
+            }
             int bytes_per_sample = (info_channels == 2) ? 4 : 2;
             int total_samples = bytes_read / bytes_per_sample;
             if (total_samples >= 128) {
@@ -1115,6 +1093,60 @@ void app_music_stop(void)
     }
 }
 
+static void pause_current_track(void)
+{
+    if (!is_playing) return;
+    audio_element_info_t info = {0};
+    audio_element_getinfo(fatfs_stream_reader, &info);
+    saved_byte_pos = info.byte_pos;
+    audio_pipeline_stop(pipeline);
+    audio_pipeline_wait_for_stop(pipeline);
+    is_playing = false;
+    ESP_LOGI(TAG, "Paused track at byte_pos = %lld", (long long)saved_byte_pos);
+}
+
+static void resume_current_track(void)
+{
+    if (is_playing || !pipeline_has_run) return;
+    if (fft_ringbuf) rb_reset(fft_ringbuf);
+    audio_pipeline_stop(pipeline);
+    audio_pipeline_wait_for_stop(pipeline);
+    audio_pipeline_terminate(pipeline);
+    audio_pipeline_reset_ringbuffer(pipeline);
+    audio_pipeline_reset_elements(pipeline);
+
+    char path[256];
+    snprintf(path, sizeof(path), "/sdcard/%s", playlist[current_track]);
+    audio_element_set_uri(fatfs_stream_reader, path);
+    audio_element_set_byte_pos(fatfs_stream_reader, (int)saved_byte_pos);
+
+    audio_pipeline_run(pipeline);
+    is_playing = true;
+    ESP_LOGI(TAG, "Resumed track from byte_pos = %lld", (long long)saved_byte_pos);
+}
+
+static int get_next_track_idx(void)
+{
+    if (total_tracks <= 0) return 0;
+    if (is_shuffle && total_tracks > 1) {
+        int next = rand() % total_tracks;
+        while (next == current_track) next = rand() % total_tracks;
+        return next;
+    }
+    return (current_track + 1) % total_tracks;
+}
+
+static int get_prev_track_idx(void)
+{
+    if (total_tracks <= 0) return 0;
+    if (is_shuffle && total_tracks > 1) {
+        int prev = rand() % total_tracks;
+        while (prev == current_track) prev = rand() % total_tracks;
+        return prev;
+    }
+    return (current_track - 1 + total_tracks) % total_tracks;
+}
+
 void app_music_handle_input(button_event_t event)
 {
     switch (event) {
@@ -1172,7 +1204,7 @@ void app_music_handle_input(button_event_t event)
             break;
         case BTN_LEFT:
             if (total_tracks > 0) {
-                int prev = (current_track - 1 + total_tracks) % total_tracks;
+                int prev = get_prev_track_idx();
                 play_track(prev);
                 selected_index = current_track;
                 ensure_cursor_visible();
@@ -1187,7 +1219,7 @@ void app_music_handle_input(button_event_t event)
             break;
         case BTN_RIGHT:
             if (total_tracks > 0) {
-                int next = (current_track + 1) % total_tracks;
+                int next = get_next_track_idx();
                 play_track(next);
                 selected_index = current_track;
                 ensure_cursor_visible();
@@ -1205,21 +1237,16 @@ void app_music_handle_input(button_event_t event)
             if (total_tracks > 0) {
                 if (in_player_ui) {
                     if (is_playing) {
-                        audio_pipeline_pause(pipeline);
-                        is_playing = false;
+                        pause_current_track();
                     } else if (pipeline_has_run) {
-                        if (fft_ringbuf) rb_reset(fft_ringbuf);
-                        audio_pipeline_resume(pipeline);
-                        is_playing = true;
+                        resume_current_track();
                     }
                     draw_player_visualizer();
                 } else {
                     if (selected_index == current_track && is_playing) {
                         // Already playing, just open player ui
                     } else if (selected_index == current_track && !is_playing && pipeline_has_run) {
-                        if (fft_ringbuf) rb_reset(fft_ringbuf);
-                        audio_pipeline_resume(pipeline);
-                        is_playing = true;
+                        resume_current_track();
                     } else {
                         play_track(selected_index);
                     }
@@ -1231,11 +1258,22 @@ void app_music_handle_input(button_event_t event)
             }
             break;
         case BTN_ESCAPE:
-        case BTN_B:
             if (in_player_ui) {
                 in_player_ui = false;
+                selected_index = current_track;
+                ensure_cursor_visible();
                 list_full_dirty = true;
                 player_dirty = true;
+                draw_music_full_ui();
+            }
+            break;
+        case BTN_B:
+            is_shuffle = !is_shuffle;
+            ESP_LOGI(TAG, "Shuffle mode: %s", is_shuffle ? "ON" : "OFF");
+            if (in_player_ui) {
+                draw_player_top_area(true);
+            } else {
+                list_full_dirty = true;
                 draw_music_full_ui();
             }
             break;
@@ -1310,7 +1348,7 @@ void app_music_tick(void)
                 && msg.source == (void *)i2s_stream_writer
                 && msg.cmd == AEL_MSG_CMD_REPORT_STATUS
                 && (int)msg.data == AEL_STATUS_STATE_FINISHED) {
-                current_track = (current_track + 1) % total_tracks;
+                current_track = get_next_track_idx();
                 play_track(current_track);
                 selected_index = current_track;
                 ensure_cursor_visible();
