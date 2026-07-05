@@ -189,9 +189,12 @@ static void draw_app_node(int idx) {
     const bool focused = (idx == home_ui.selected);
     const int r = home_ui.icon_radius[idx];
 
-    // [Goal 5] Reduced bounding box to 68x68, since max radius is 32 + 2(border) = 34. Diameter = 68.
+    // Dynamic blit size: diameter + 2px margin, clamped to max NODE_SIZE
     #define NODE_SIZE 68
-    #define NODE_HALF 34
+    int blit_size = (r + 1) * 2;
+    if (blit_size > NODE_SIZE) blit_size = NODE_SIZE;
+    if (blit_size < 4) blit_size = 4;
+    int blit_half = blit_size / 2;
 
     // Quad buffering: 4 buffers to prevent DMA corruption across multiple frames
     static uint16_t node_bufs[4][NODE_SIZE * NODE_SIZE];
@@ -206,18 +209,17 @@ static void draw_app_node(int idx) {
     uint16_t border_swapped = ((border_color >> 8) | (border_color << 8));
     int border_w = focused ? 2 : 1;
 
-    // [Goal 5] Calculate distance squares outside the inner loop
     int r_sq = r * r;
     int inner_r_sq = (r - border_w) * (r - border_w);
 
-    // Fill buffer procedurally avoiding memset overhead
-    for (int y = 0; y < NODE_SIZE; y++) {
-        int dy = y - NODE_HALF;
-        int dy_sq = dy * dy; // Optimization: dy^2 calculated once per row
-        int row_offset = y * NODE_SIZE;
+    // Fill buffer using blit_size dimensions
+    for (int y = 0; y < blit_size; y++) {
+        int dy = y - blit_half;
+        int dy_sq = dy * dy;
+        int row_offset = y * blit_size;
         
-        for (int x = 0; x < NODE_SIZE; x++) {
-            int dx = x - NODE_HALF;
+        for (int x = 0; x < blit_size; x++) {
+            int dx = x - blit_half;
             int dist_sq = dx * dx + dy_sq;
             
             if (dist_sq <= r_sq) {
@@ -235,18 +237,18 @@ static void draw_app_node(int idx) {
     uint16_t fg_color = focused ? RG_COLOR_WHITE : RG_COLOR_RGB(0x99, 0x99, 0x99);
     uint16_t fg_swapped = ((fg_color >> 8) | (fg_color << 8));
     
-    // [Goal 4] Use icon_dx and icon_dy for precise independent positioning
-    int icon_start_x = NODE_HALF - 12 + a->icon_dx;
-    int icon_start_y = NODE_HALF - 12 + a->icon_dy;
+    // Icon positioned relative to blit center
+    int icon_start_x = blit_half - 12 + a->icon_dx;
+    int icon_start_y = blit_half - 12 + a->icon_dy;
     
     for (int y = 0; y < 24; y++) {
         int buf_y = icon_start_y + y;
-        if (buf_y < 0 || buf_y >= NODE_SIZE) continue; // Bounds check
-        int row_offset = buf_y * NODE_SIZE;
+        if (buf_y < 0 || buf_y >= blit_size) continue;
+        int row_offset = buf_y * blit_size;
         
         for (int x = 0; x < 24; x++) {
             int buf_x = icon_start_x + x;
-            if (buf_x < 0 || buf_x >= NODE_SIZE) continue;
+            if (buf_x < 0 || buf_x >= blit_size) continue;
             
             int bit_idx = y * 24 + x;
             int byte_idx = bit_idx / 8;
@@ -257,7 +259,7 @@ static void draw_app_node(int idx) {
         }
     }
 
-    rg_display_write(cx - NODE_HALF, cy - NODE_HALF, NODE_SIZE, NODE_SIZE, NODE_SIZE * 2, node_buf);
+    rg_display_write(cx - blit_half, cy - blit_half, blit_size, blit_size, blit_size * 2, node_buf);
 }
 
 void home_ui_draw(void) {

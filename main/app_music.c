@@ -1,4 +1,6 @@
 #include "app_music.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -16,10 +18,11 @@
 
 static const char *TAG = "APP_MUSIC";
 
-#define MAX_PLAYLIST_FILES 100
-static char *playlist[MAX_PLAYLIST_FILES];
+#define MAX_PLAYLIST_FILES 1000
+static char **playlist = NULL;
 static int total_tracks = 0;
 static int current_track = 0;
+static bool music_initialized = false;
 
 static audio_pipeline_handle_t pipeline = NULL;
 static audio_element_handle_t fatfs_stream_reader = NULL;
@@ -76,6 +79,8 @@ static int64_t progress_timer = 0;
 static bool list_full_dirty = true;
 static bool scroll_only_dirty = false;
 static bool player_dirty = true;
+static bool slot_dirty[6] = {false};
+static int prev_selected = -1;
 
 // ---- SD Card Scan ----
 static void scan_sd_card_for_mp3s(void)
@@ -345,15 +350,21 @@ static void play_track(int index)
 void app_music_init(audio_hal_handle_t hal_handle)
 {
     music_hal_handle = hal_handle;
-    scan_sd_card_for_mp3s();
-    if (total_tracks > 0) {
-        init_audio_pipeline();
-    }
 }
 
 void app_music_start(void)
 {
     ESP_LOGI(TAG, "Music App Started");
+    if (!music_initialized) {
+        if (!playlist) {
+            playlist = calloc(MAX_PLAYLIST_FILES, sizeof(char *));
+        }
+        scan_sd_card_for_mp3s();
+        if (total_tracks > 0) {
+            init_audio_pipeline();
+        }
+        music_initialized = true;
+    }
     selected_index = current_track;
     ensure_cursor_visible();
     scroll_char_offset = 0;
@@ -376,23 +387,59 @@ void app_music_handle_input(button_event_t event)
 {
     switch (event) {
         case BTN_UP:
-        case BTN_LEFT:
             if (total_tracks > 0) {
+                int old_vs = view_start;
+                prev_selected = selected_index;
                 selected_index = (selected_index - 1 + total_tracks) % total_tracks;
                 ensure_cursor_visible();
                 scroll_char_offset = 0;
                 scroll_timer = esp_timer_get_time() / 1000;
-                list_full_dirty = true;
+                if (view_start != old_vs) {
+                    list_full_dirty = true;
+                } else {
+                    int os = prev_selected - view_start;
+                    int ns = selected_index - view_start;
+                    if (os >= 0 && os < VISIBLE_ITEMS) slot_dirty[os] = true;
+                    if (ns >= 0 && ns < VISIBLE_ITEMS) slot_dirty[ns] = true;
+                }
             }
             break;
         case BTN_DOWN:
-        case BTN_RIGHT:
             if (total_tracks > 0) {
+                int old_vs2 = view_start;
+                prev_selected = selected_index;
                 selected_index = (selected_index + 1) % total_tracks;
                 ensure_cursor_visible();
                 scroll_char_offset = 0;
                 scroll_timer = esp_timer_get_time() / 1000;
-                list_full_dirty = true;
+                if (view_start != old_vs2) {
+                    list_full_dirty = true;
+                } else {
+                    int os2 = prev_selected - view_start;
+                    int ns2 = selected_index - view_start;
+                    if (os2 >= 0 && os2 < VISIBLE_ITEMS) slot_dirty[os2] = true;
+                    if (ns2 >= 0 && ns2 < VISIBLE_ITEMS) slot_dirty[ns2] = true;
+                }
+            }
+            break;
+        case BTN_LEFT:
+            if (total_tracks > 0) {
+                int prev = (current_track - 1 + total_tracks) % total_tracks;
+                play_track(prev);
+                selected_index = current_track;
+                ensure_cursor_visible();
+                scroll_char_offset = 0;
+                scroll_timer = esp_timer_get_time() / 1000;
+            }
+            break;
+        case BTN_RIGHT:
+            if (total_tracks > 0) {
+                int next = (current_track + 1) % total_tracks;
+                play_track(next);
+                selected_index = current_track;
+                ensure_cursor_visible();
+                scroll_char_offset = 0;
+                scroll_timer = esp_timer_get_time() / 1000;
             }
             break;
         case BTN_ENTER:
@@ -416,14 +463,20 @@ void app_music_handle_input(button_event_t event)
         case BTN_VOL_UP:
             if (music_hal_handle) {
                 current_volume = (current_volume + 5 > 100) ? 100 : current_volume + 5;
-                audio_hal_set_volume(music_hal_handle, current_volume);
+                for (int retry = 0; retry < 3; retry++) {
+                    if (audio_hal_set_volume(music_hal_handle, current_volume) == ESP_OK) break;
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
                 ESP_LOGI(TAG, "Volume: %d", current_volume);
             }
             break;
         case BTN_VOL_DOWN:
             if (music_hal_handle) {
                 current_volume = (current_volume - 5 < 0) ? 0 : current_volume - 5;
-                audio_hal_set_volume(music_hal_handle, current_volume);
+                for (int retry = 0; retry < 3; retry++) {
+                    if (audio_hal_set_volume(music_hal_handle, current_volume) == ESP_OK) break;
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
                 ESP_LOGI(TAG, "Volume: %d", current_volume);
             }
             break;
@@ -467,13 +520,24 @@ void app_music_tick(void)
         draw_song_list();
         list_full_dirty = false;
         scroll_only_dirty = false;
-    } else if (scroll_only_dirty) {
-        rg_gui_set_font_size(8);
-        int sel_slot = selected_index - view_start;
-        if (sel_slot >= 0 && sel_slot < VISIBLE_ITEMS) {
-            draw_list_item(sel_slot);
+        for (int i = 0; i < VISIBLE_ITEMS; i++) slot_dirty[i] = false;
+    } else {
+        // Partial slot redraws
+        for (int i = 0; i < VISIBLE_ITEMS; i++) {
+            if (slot_dirty[i]) {
+                rg_gui_set_font_size(8);
+                draw_list_item(i);
+                slot_dirty[i] = false;
+            }
         }
-        scroll_only_dirty = false;
+        if (scroll_only_dirty) {
+            rg_gui_set_font_size(8);
+            int sel_slot = selected_index - view_start;
+            if (sel_slot >= 0 && sel_slot < VISIBLE_ITEMS) {
+                draw_list_item(sel_slot);
+            }
+            scroll_only_dirty = false;
+        }
     }
 
     // 4. Redraw mini player if dirty
