@@ -250,6 +250,10 @@ static void sd_card_scan_task(void *arg)
 
 static int decoder_write_cb(audio_element_handle_t el, char *buffer, int len, TickType_t ticks_to_wait, void *ctx)
 {
+    static int cnt = 0;
+    if (++cnt % 100 == 0) {
+        ESP_LOGI(TAG, "decoder callback %d bytes", len);
+    }
     if (fft_ringbuf && len > 0) {
         int avail_fill = rb_bytes_filled(fft_ringbuf);
         if (avail_fill + len > 4000) {
@@ -523,27 +527,66 @@ static void draw_player_title(void)
     rg_gui_draw_text_line(0, 16, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, 4);
 }
 
+static int artist_scroll = 0;
+static int64_t artist_scroll_timer = 0;
+
 static void draw_player_metadata(void)
 {
-    char artist_disp[80];
-    snprintf(artist_disp, sizeof(artist_disp), " %s", info_artist_str);
-    ESP_LOGI(TAG, "Artist = '%s'", info_artist_str);
-
     char fmt_str[64];
-    snprintf(fmt_str, sizeof(fmt_str), "%s | %d.%01d kHz | %d kbps",
+
+    snprintf(fmt_str,
+             sizeof(fmt_str),
+             "%s | %d.%01d kHz | %d kbps",
              info_format_str,
              info_sample_rate / 1000,
              (info_sample_rate % 1000) / 100,
              info_bitrate);
-    ESP_LOGI(TAG, "Format = '%s'", fmt_str);
 
-    rg_gui_draw_rect(0, 50, SCREEN_W, 16, MUSIC_BG);
-    rg_gui_set_font_size(8);
-    rg_gui_draw_text_box(0, 50, SCREEN_W, 16, MUSIC_BG, artist_disp);
+    const char *artist = info_artist_str;
 
-    rg_gui_draw_rect(0, 72, SCREEN_W, 16, MUSIC_BG);
+    int len = strlen(artist);
+
+    if (len > 30) {
+
+        int max = len - 30;
+
+        if (artist_scroll > max)
+            artist_scroll = 0;
+
+        artist += artist_scroll;
+    }
+
+    char display[80];
+
+    snprintf(display,sizeof(display)," %s",artist);
+
+    rg_gui_draw_rect(0,50,SCREEN_W,16,MUSIC_BG);
+
     rg_gui_set_font_size(8);
-    rg_gui_draw_text_box(0, 72, SCREEN_W, 16, MUSIC_BG, fmt_str);
+
+    rg_gui_draw_text_line(
+            0,
+            50,
+            SCREEN_W,
+            16,
+            MUSIC_BG,
+            RG_COLOR_WHITE,
+            display,
+            4);
+
+    rg_gui_draw_rect(0,72,SCREEN_W,16,MUSIC_BG);
+
+    rg_gui_set_font_size(8);
+
+    rg_gui_draw_text_line(
+            0,
+            72,
+            SCREEN_W,
+            16,
+            MUSIC_BG,
+            RG_COLOR_WHITE,
+            fmt_str,
+            4);
 }
 
 static void draw_player_timer(void)
@@ -661,9 +704,9 @@ static void draw_player_visualizer(void)
 
     if (is_playing && fft_ringbuf) {
         static int log_cnt = 0;
-        int avail = rb_bytes_available(fft_ringbuf);
+        int avail = rb_bytes_filled(fft_ringbuf);
         if (++log_cnt % 50 == 1) {
-            ESP_LOGI(TAG, "FFT rb avail = %d, filled = %d", avail, rb_bytes_filled(fft_ringbuf));
+            ESP_LOGI(TAG, "FFT rb filled = %d", avail);
         }
         if (avail > 0) {
             if (avail > (int)sizeof(pcm_read_buf)) avail = (int)sizeof(pcm_read_buf);
@@ -1014,6 +1057,8 @@ static void play_track(int index)
     player_dirty = true;
     mini_scroll_char_offset = 0;
     mini_scroll_timer = esp_timer_get_time() / 1000;
+    artist_scroll = 0;
+    artist_scroll_timer = esp_timer_get_time() / 1000;
 }
 
 // ---- Public API ----
@@ -1282,6 +1327,13 @@ void app_music_tick(void)
     // If in Player UI, handle visualizer, time updates, title scrolling, volume bar
     if (in_player_ui) {
         int64_t now_ms = esp_timer_get_time() / 1000;
+        if (now_ms - artist_scroll_timer > 200) {
+            artist_scroll_timer = now_ms;
+            if (strlen(info_artist_str) > 30) {
+                artist_scroll++;
+                draw_player_metadata();
+            }
+        }
         if (now_ms - last_vis_time >= 25) {
             last_vis_time = now_ms;
             draw_player_visualizer();
