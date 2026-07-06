@@ -728,7 +728,9 @@ static void draw_player_thumbnail(void)
 
     bool drawn_ok = false;
     if (current_apic_size > 0 && current_apic_offset > 0 && total_tracks > 0 && playlist && playlist[current_track]) {
-        FILE *f = fopen(playlist[current_track], "rb");
+        char path[512];
+        snprintf(path, sizeof(path), "/sdcard/%s", playlist[current_track]);
+        FILE *f = fopen(path, "rb");
         if (f) {
             if (fseek(f, current_apic_offset, SEEK_SET) == 0) {
                 uint8_t *jpg_data = heap_caps_malloc(current_apic_size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
@@ -813,7 +815,7 @@ static void draw_player_thumbnail(void)
             }
             fclose(f);
         } else {
-            ESP_LOGW(TAG, "fopen failed for %s", playlist[current_track]);
+            ESP_LOGW(TAG, "fopen failed for %s", path);
         }
     } else {
         ESP_LOGW(TAG, "No valid APIC data for thumbnail: off=%lu, size=%lu, track=%d", (unsigned long)current_apic_offset, (unsigned long)current_apic_size, current_track);
