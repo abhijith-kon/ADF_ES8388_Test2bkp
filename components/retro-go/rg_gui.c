@@ -2,6 +2,15 @@
 #include "rg_display.h"
 #include <string.h>
 #include <stdlib.h>
+#include "esp_heap_caps.h"
+
+static void *rg_gui_dma_malloc(size_t size)
+{
+    void *ptr = heap_caps_malloc(size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!ptr) ptr = heap_caps_malloc(size, MALLOC_CAP_DMA);
+    if (!ptr) ptr = malloc(size);
+    return ptr;
+}
 
 // Global state for new primitives
 static uint16_t current_fill_color = 0xFFFF;
@@ -210,7 +219,7 @@ void rg_gui_draw_text_center(int x, int y, const char *text)
     int needed_size = total_w * char_w * 2;
     if (needed_size > str_buf_sizes[buf_idx]) {
         if (str_bufs[buf_idx]) free(str_bufs[buf_idx]);
-        str_bufs[buf_idx] = malloc(needed_size);
+        str_bufs[buf_idx] = rg_gui_dma_malloc(needed_size);
         str_buf_sizes[buf_idx] = needed_size;
     }
     if (!str_bufs[buf_idx]) return;
@@ -267,7 +276,7 @@ void rg_gui_draw_text_box(int box_x, int box_y, int box_w, int box_h,
     int needed = pixel_count * (int)sizeof(uint16_t);
     if (needed > tb_sizes[tb_idx]) {
         if (tb_bufs[tb_idx]) free(tb_bufs[tb_idx]);
-        tb_bufs[tb_idx] = malloc(needed);
+        tb_bufs[tb_idx] = rg_gui_dma_malloc(needed);
         tb_sizes[tb_idx] = needed;
     }
     if (!tb_bufs[tb_idx]) return;
@@ -328,7 +337,7 @@ void rg_gui_draw_text_line(int box_x, int box_y, int box_w, int box_h,
     int needed = pixel_count * (int)sizeof(uint16_t);
     if (needed > tl_sizes[tl_idx]) {
         if (tl_bufs[tl_idx]) free(tl_bufs[tl_idx]);
-        tl_bufs[tl_idx] = malloc(needed);
+        tl_bufs[tl_idx] = rg_gui_dma_malloc(needed);
         tl_sizes[tl_idx] = needed;
     }
     if (!tl_bufs[tl_idx]) return;
@@ -444,7 +453,7 @@ void rg_gui_draw_text_scaled(int x, int y, const char *text, uint16_t color, uin
     int needed_size = total_w * total_h * (int)sizeof(uint16_t);
     if (needed_size > ts_sizes[ts_idx]) {
         if (ts_bufs[ts_idx]) free(ts_bufs[ts_idx]);
-        ts_bufs[ts_idx] = malloc(needed_size);
+        ts_bufs[ts_idx] = rg_gui_dma_malloc(needed_size);
         ts_sizes[ts_idx] = needed_size;
     }
     if (!ts_bufs[ts_idx]) return;

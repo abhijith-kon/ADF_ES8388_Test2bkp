@@ -17,6 +17,7 @@
 #include "home_rg_gui.h"
 #include "app_music.h"
 #include "app_files.h"
+#include "app_alarm.h"
 #include "ui.h" // Retro-OS games launcher
 
 static const char *TAG = "MAIN";
@@ -25,6 +26,7 @@ typedef enum {
     APP_HOME,
     APP_FILES,
     APP_MUSIC,
+    APP_ALARM,
     APP_GAMES
 } app_state_t;
 
@@ -40,12 +42,12 @@ static audio_board_handle_t board_handle = NULL;
 static uint8_t bcd2dec(uint8_t val) { return ((val / 16 * 10) + (val % 16)); }
 static uint8_t dec2bcd(uint8_t val) { return ((val / 10 * 16) + (val % 10)); }
 
-static void rtc_set_time_ds3231(i2c_bus_handle_t bus, int year, int mon, int mday, int hour, int min, int sec) {
+static void rtc_set_time_ds3231(i2c_bus_handle_t bus, int wday, int year, int mon, int mday, int hour, int min, int sec) {
     uint8_t data[7];
     data[0] = dec2bcd(sec);
     data[1] = dec2bcd(min);
     data[2] = dec2bcd(hour);
-    data[3] = 0x01; // Day of week (1-7)
+    data[3] = dec2bcd(wday); // Day of week (1-7)
     data[4] = dec2bcd(mday);
     data[5] = dec2bcd(mon);
     data[6] = dec2bcd(year % 100);
@@ -56,6 +58,29 @@ static void rtc_set_time_ds3231(i2c_bus_handle_t bus, int year, int mon, int mda
     } else {
         ESP_LOGW(TAG, "Failed to write DS3231 time over i2c_bus (err=%d)", err);
     }
+}
+
+static void parse_compile_time(struct tm *build_tm) {
+    const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    char mstr[4] = {0};
+    int mday = 0, year = 0, hour = 0, min = 0, sec = 0;
+    sscanf(__DATE__, "%3s %d %d", mstr, &mday, &year);
+    int mon = 0;
+    for (int i = 0; i < 12; i++) {
+        if (strcmp(mstr, months[i]) == 0) {
+            mon = i;
+            break;
+        }
+    }
+    sscanf(__TIME__, "%d:%d:%d", &hour, &min, &sec);
+    memset(build_tm, 0, sizeof(struct tm));
+    build_tm->tm_year = year - 1900;
+    build_tm->tm_mon = mon;
+    build_tm->tm_mday = mday;
+    build_tm->tm_hour = hour;
+    build_tm->tm_min = min;
+    build_tm->tm_sec = sec;
+    mktime(build_tm); // computes tm_wday
 }
 
 static void rtc_sync_from_ds3231(void) {
@@ -76,6 +101,10 @@ static void rtc_sync_from_ds3231(void) {
     uint8_t reg = 0x00;
     esp_err_t err = i2c_bus_read_bytes(bus, DS3231_ADDR, &reg, 1, data, 7);
     
+    struct tm build_tm;
+    parse_compile_time(&build_tm);
+    time_t build_time = mktime(&build_tm);
+
     if (err == ESP_OK) {
         int year = bcd2dec(data[6]) + 2000;
         int mon  = bcd2dec(data[5] & 0x1F);
@@ -83,12 +112,6 @@ static void rtc_sync_from_ds3231(void) {
         int hour = bcd2dec(data[2] & 0x3F);
         int min  = bcd2dec(data[1]);
         int sec  = bcd2dec(data[0] & 0x7F);
-
-        if (year < 2024 || mon < 1 || mon > 12 || mday < 1 || mday > 31) {
-            ESP_LOGW(TAG, "RTC DS3231 time invalid (%04d-%02d-%02d), initializing default timestamp", year, mon, mday);
-            rtc_set_time_ds3231(bus, 2026, 7, 6, 12, 0, 0);
-            year = 2026; mon = 7; mday = 6; hour = 12; min = 0; sec = 0;
-        }
 
         struct tm rtc_tm = {
             .tm_sec  = sec,
@@ -98,11 +121,22 @@ static void rtc_sync_from_ds3231(void) {
             .tm_mon  = mon - 1,
             .tm_year = year - 1900
         };
+        time_t rtc_time = mktime(&rtc_tm);
+
+        if (year < 2026 || rtc_time < build_time) {
+            ESP_LOGW(TAG, "RTC DS3231 time (%04d-%02d-%02d %02d:%02d:%02d) is behind build time, updating to build time", year, mon, mday, hour, min, sec);
+            int wday_ds = (build_tm.tm_wday + 1);
+            rtc_set_time_ds3231(bus, wday_ds, build_tm.tm_year + 1900, build_tm.tm_mon + 1, build_tm.tm_mday, build_tm.tm_hour, build_tm.tm_min, build_tm.tm_sec);
+            rtc_tm = build_tm;
+        }
+
         struct timeval tv = { .tv_sec = mktime(&rtc_tm), .tv_usec = 0 };
         settimeofday(&tv, NULL);
-        ESP_LOGI(TAG, "RTC DS3231 synced OK: %04d-%02d-%02d %02d:%02d:%02d", year, mon, mday, hour, min, sec);
+        ESP_LOGI(TAG, "RTC DS3231 synced OK: %04d-%02d-%02d %02d:%02d:%02d", rtc_tm.tm_year + 1900, rtc_tm.tm_mon + 1, rtc_tm.tm_mday, rtc_tm.tm_hour, rtc_tm.tm_min, rtc_tm.tm_sec);
     } else {
-        ESP_LOGW(TAG, "Failed to communicate with RTC DS3231 over i2c_bus (err=%d)", err);
+        ESP_LOGW(TAG, "Failed to communicate with RTC DS3231 over i2c_bus (err=%d), setting system time to build time", err);
+        struct timeval tv = { .tv_sec = build_time, .tv_usec = 0 };
+        settimeofday(&tv, NULL);
     }
 }
 
@@ -163,6 +197,7 @@ void app_main(void)
     // Init apps
     app_files_init();
     app_music_init(board_handle->audio_hal);
+    app_alarm_init();
     home_ui_init();
 
     ESP_LOGI(TAG, "System ready. Entering HOME.");
@@ -184,6 +219,10 @@ void app_main(void)
                     current_app = APP_MUSIC;
                     app_music_start();
                 } 
+                else if (selected == 6) { // APP_ALARM
+                    current_app = APP_ALARM;
+                    app_alarm_start();
+                }
                 else if (selected == 7) { // APP_GAMES
                     current_app = APP_GAMES;
                     ui_init(); // Draw the retro-go launcher
@@ -213,6 +252,17 @@ void app_main(void)
                 app_music_handle_input(event);
             }
         }
+        else if (current_app == APP_ALARM) {
+            if (event == BTN_ESCAPE) {
+                app_alarm_stop();
+                current_app = APP_HOME;
+                rg_display_drain();
+                rg_gui_clear(0x0000);
+                home_ui_force_redraw();
+            } else {
+                app_alarm_handle_input(event);
+            }
+        }
         else if (current_app == APP_GAMES) {
             if (event == BTN_ESCAPE || event == BTN_B) {
                 current_app = APP_HOME;
@@ -237,10 +287,14 @@ void app_main(void)
         else if (current_app == APP_FILES) {
             app_files_tick();
         }
+        else if (current_app == APP_ALARM) {
+            // UI updates handled inside app_alarm_tick or input
+        }
         else if (current_app == APP_GAMES) {
             ui_update();
         }
 
+        app_alarm_tick(); // Check and ring alarm across all apps
         vTaskDelay(1);
     }
 }

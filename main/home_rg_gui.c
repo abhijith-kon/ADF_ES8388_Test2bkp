@@ -19,9 +19,9 @@
 #define TIME_BOX_Y      23
 #define TIME_BOX_W      140
 #define TIME_BOX_H      28
-#define DATE_BOX_X      (CENTER_X - 64)
+#define DATE_BOX_X      (CENTER_X - 80)
 #define DATE_BOX_Y      63
-#define DATE_BOX_W      128
+#define DATE_BOX_W      160
 #define DATE_BOX_H      12
 #define APPTEXT_BOX_X   (CENTER_X - 60)
 #define APPTEXT_BOX_Y   (CENTER_Y - 11)
@@ -59,7 +59,7 @@ typedef struct {
     uint8_t previous_selected; 
     int icon_radius[NUM_APPS];
     char time_text[8];
-    char date_text[20];
+    char date_text[32];
     char app_text[32];
     bool need_time_refresh;
     bool need_app_text_refresh;
@@ -78,9 +78,14 @@ static void home_ui_update_clock(void) {
     struct tm *tinfo = localtime(&now);
     snprintf(home_ui.time_text, sizeof(home_ui.time_text), "%02d:%02d", tinfo->tm_hour, tinfo->tm_min);
     
+    const char* days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
     const char* months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-    snprintf(home_ui.date_text, sizeof(home_ui.date_text), "%s %02d, %d", 
-             months[tinfo->tm_mon], tinfo->tm_mday, 1900 + tinfo->tm_year);
+    int wday = tinfo->tm_wday;
+    if (wday < 0 || wday > 6) wday = 0;
+    int mon = tinfo->tm_mon;
+    if (mon < 0 || mon > 11) mon = 0;
+    snprintf(home_ui.date_text, sizeof(home_ui.date_text), "%s, %s %02d, %d", 
+             days[wday], months[mon], tinfo->tm_mday, 1900 + tinfo->tm_year);
     
     home_ui.needs_redraw = true;
 }
