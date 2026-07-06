@@ -26,6 +26,7 @@
 #include <math.h>
 #include "esp_heap_caps.h"
 #include "esp_random.h"
+#include "esp32s3/rom/tjpgd.h"
 
 static const char *TAG = "APP_MUSIC";
 
@@ -125,6 +126,9 @@ static char info_artist_str[64] = "Unknown Artist";
 static char info_title_str[128] = "";
 static int64_t saved_byte_pos = 0;
 static bool is_shuffle = false;
+static bool show_thumbnail = false;
+static uint32_t current_apic_offset = 0;
+static uint32_t current_apic_size = 0;
 
 // FFT visualizer state (48 radial lines)
 #define NUM_FFT_BANDS 48
@@ -143,6 +147,7 @@ static void draw_player_title(void);
 static void draw_player_metadata(void);
 static void draw_player_timer(void);
 static void draw_player_visualizer(void);
+static void draw_player_thumbnail(void);
 static void draw_volume_bar(void);
 static float get_playback_progress(void);
 
@@ -256,7 +261,7 @@ static int decoder_write_cb(audio_element_handle_t el, char *buffer, int len, Ti
     if (++cnt % 100 == 0) {
         ESP_LOGI(TAG, "decoder callback %d bytes", len);
     }
-    if (fft_ringbuf && len > 0) {
+    if (!show_thumbnail && fft_ringbuf && len > 0) {
         int avail_fill = rb_bytes_filled(fft_ringbuf);
         if (avail_fill + len > 4000) {
             char dummy[512];
@@ -514,18 +519,23 @@ static void draw_player_title(void)
     if (current_track >= total_tracks) return;
     const char *name = strlen(info_title_str) ? info_title_str : playlist[current_track];
     int name_len = strlen(name);
+    int max_chars = 14;
     int ofs = 0;
-    if (name_len > 14) {
+    int left_pad = 0;
+    if (name_len > max_chars) {
         ofs = player_scroll_char_offset;
-        int max_ofs = name_len - 14;
+        int max_ofs = name_len - max_chars;
         if (ofs > max_ofs) ofs = max_ofs;
+        left_pad = 8;
+    } else {
+        left_pad = (SCREEN_W - (name_len * 16)) / 2;
+        if (left_pad < 0) left_pad = 0;
     }
-    char display[64];
-    snprintf(display, sizeof(display), " %s ", name + ofs);
+    char display[32];
+    snprintf(display, sizeof(display), "%.*s", max_chars, name + ofs);
     
-    rg_gui_draw_rect(0, 16, SCREEN_W, 24, MUSIC_BG);
     rg_gui_set_font_size(16);
-    rg_gui_draw_text_center(SCREEN_W / 2, 20, display);
+    rg_gui_draw_text_line(0, 16, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, left_pad);
 }
 
 static int artist_scroll = 0;
@@ -550,7 +560,7 @@ static void draw_player_metadata(void)
     }
 
     char display[80];
-    snprintf(display, sizeof(display), " %s", artist);
+    snprintf(display, sizeof(display), " %.*s", 30, artist);
 
     rg_gui_draw_rect(0, 50, SCREEN_W, 16, MUSIC_BG);
     rg_gui_set_font_size(8);
@@ -655,9 +665,172 @@ static void compute_fft_128(float *real, float *imag)
     }
 }
 
+typedef struct {
+    const uint8_t *jpg_data;
+    uint32_t jpg_size;
+    uint32_t jpg_offset;
+    uint16_t *out_img;
+    int out_w;
+    int out_h;
+} tjpg_session_t;
+
+static UINT tjpg_in_func(JDEC *jd, BYTE *buff, UINT nbyte)
+{
+    tjpg_session_t *sess = (tjpg_session_t *)jd->device;
+    if (sess->jpg_offset >= sess->jpg_size) return 0;
+    UINT rem = sess->jpg_size - sess->jpg_offset;
+    if (nbyte > rem) nbyte = rem;
+    if (buff) {
+        memcpy(buff, sess->jpg_data + sess->jpg_offset, nbyte);
+    }
+    sess->jpg_offset += nbyte;
+    return nbyte;
+}
+
+static UINT tjpg_out_func(JDEC *jd, void *bitmap, JRECT *rect)
+{
+    tjpg_session_t *sess = (tjpg_session_t *)jd->device;
+    if (!sess->out_img) return 0;
+    uint8_t *rgb = (uint8_t *)bitmap;
+    int w = rect->right - rect->left + 1;
+    int h = rect->bottom - rect->top + 1;
+    for (int y = 0; y < h; y++) {
+        int dst_y = rect->top + y;
+        if (dst_y >= sess->out_h) continue;
+        for (int x = 0; x < w; x++) {
+            int dst_x = rect->left + x;
+            if (dst_x >= sess->out_w) continue;
+            uint8_t r = rgb[(y * w + x) * 3 + 0];
+            uint8_t g = rgb[(y * w + x) * 3 + 1];
+            uint8_t b = rgb[(y * w + x) * 3 + 2];
+            uint16_t color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+            uint16_t color_sw = (uint16_t)((color >> 8) | (color << 8));
+            sess->out_img[dst_y * sess->out_w + dst_x] = color_sw;
+        }
+    }
+    return 1;
+}
+
+static void draw_player_thumbnail(void)
+{
+    ESP_LOGI(TAG, "draw_player_thumbnail called: show=%d, track=%d, apic_off=%lu, apic_len=%lu",
+             show_thumbnail, current_track, (unsigned long)current_apic_offset, (unsigned long)current_apic_size);
+
+    if (!vis_buf) {
+        vis_buf = heap_caps_malloc(180 * 180 * sizeof(uint16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!vis_buf) vis_buf = malloc(180 * 180 * sizeof(uint16_t));
+    }
+    if (!vis_buf) return;
+
+    int box_s = 180;
+    uint16_t bg_sw = (uint16_t)((MUSIC_BG >> 8) | (MUSIC_BG << 8));
+    for (int i = 0; i < box_s * box_s; i++) vis_buf[i] = bg_sw;
+
+    bool drawn_ok = false;
+    if (current_apic_size > 0 && current_apic_offset > 0 && total_tracks > 0 && playlist && playlist[current_track]) {
+        FILE *f = fopen(playlist[current_track], "rb");
+        if (f) {
+            if (fseek(f, current_apic_offset, SEEK_SET) == 0) {
+                uint8_t *jpg_data = heap_caps_malloc(current_apic_size, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+                if (!jpg_data) jpg_data = heap_caps_malloc(current_apic_size, MALLOC_CAP_8BIT);
+                if (!jpg_data) jpg_data = malloc(current_apic_size);
+                if (jpg_data) {
+                    size_t read_bytes = fread(jpg_data, 1, current_apic_size, f);
+                    if (read_bytes == current_apic_size) {
+                        tjpg_session_t sess;
+                        sess.jpg_data = jpg_data;
+                        sess.jpg_size = current_apic_size;
+                        sess.jpg_offset = 0;
+                        sess.out_img = NULL;
+                        sess.out_w = 0;
+                        sess.out_h = 0;
+
+                        JDEC jd;
+                        char *pool = heap_caps_malloc(4096, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+                        if (!pool) pool = malloc(4096);
+                        if (pool) {
+                            JRESULT res_prep = jd_prepare(&jd, tjpg_in_func, pool, 4096, &sess);
+                            if (res_prep == JDR_OK) {
+                                uint8_t scale = 0;
+                                while ((jd.width >> (scale + 1)) >= 180 && (jd.height >> (scale + 1)) >= 180 && scale < 3) {
+                                    scale++;
+                                }
+                                int dec_w = jd.width >> scale;
+                                int dec_h = jd.height >> scale;
+                                sess.out_w = dec_w;
+                                sess.out_h = dec_h;
+                                sess.out_img = heap_caps_malloc(dec_w * dec_h * sizeof(uint16_t), MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+                                if (!sess.out_img) sess.out_img = heap_caps_malloc(dec_w * dec_h * sizeof(uint16_t), MALLOC_CAP_8BIT);
+                                if (!sess.out_img) sess.out_img = malloc(dec_w * dec_h * sizeof(uint16_t));
+
+                                if (sess.out_img) {
+                                    JRESULT res_dec = jd_decomp(&jd, tjpg_out_func, scale);
+                                    if (res_dec == JDR_OK) {
+                                        float scale_x = 180.0f / (float)dec_w;
+                                        float scale_y = 180.0f / (float)dec_h;
+                                        float s = (scale_x < scale_y) ? scale_x : scale_y;
+                                        int draw_w = (int)(dec_w * s);
+                                        int draw_h = (int)(dec_h * s);
+                                        if (draw_w > 180) draw_w = 180;
+                                        if (draw_h > 180) draw_h = 180;
+                                        int offset_x = (180 - draw_w) / 2;
+                                        int offset_y = (180 - draw_h) / 2;
+
+                                        for (int ty = 0; ty < draw_h; ty++) {
+                                            for (int tx = 0; tx < draw_w; tx++) {
+                                                int sx = (tx * dec_w) / draw_w;
+                                                int sy = (ty * dec_h) / draw_h;
+                                                if (sx >= dec_w) sx = dec_w - 1;
+                                                if (sy >= dec_h) sy = dec_h - 1;
+                                                vis_buf[(offset_y + ty) * 180 + (offset_x + tx)] = sess.out_img[sy * dec_w + sx];
+                                            }
+                                        }
+                                        drawn_ok = true;
+                                        ESP_LOGI(TAG, "Thumbnail decompressed OK (%lu x %lu -> %d x %d)", (unsigned long)jd.width, (unsigned long)jd.height, draw_w, draw_h);
+                                    } else {
+                                        ESP_LOGW(TAG, "jd_decomp failed: %d", (int)res_dec);
+                                    }
+                                    free(sess.out_img);
+                                } else {
+                                    ESP_LOGW(TAG, "Failed to allocate out_img (%d x %d)", dec_w, dec_h);
+                                }
+                            } else {
+                                ESP_LOGW(TAG, "jd_prepare failed: %d (off=%lu, size=%lu)", (unsigned long)res_prep, (unsigned long)current_apic_offset, (unsigned long)current_apic_size);
+                            }
+                            free(pool);
+                        } else {
+                            ESP_LOGW(TAG, "Failed to allocate 4096 byte pool for TJpgDec");
+                        }
+                    } else {
+                        ESP_LOGW(TAG, "fread failed: read %lu of %lu bytes", (unsigned long)read_bytes, (unsigned long)current_apic_size);
+                    }
+                    free(jpg_data);
+                } else {
+                    ESP_LOGW(TAG, "Failed to allocate %lu bytes for jpg_data", (unsigned long)current_apic_size);
+                }
+            } else {
+                ESP_LOGW(TAG, "fseek to %lu failed", (unsigned long)current_apic_offset);
+            }
+            fclose(f);
+        } else {
+            ESP_LOGW(TAG, "fopen failed for %s", playlist[current_track]);
+        }
+    } else {
+        ESP_LOGW(TAG, "No valid APIC data for thumbnail: off=%lu, size=%lu, track=%d", (unsigned long)current_apic_offset, (unsigned long)current_apic_size, current_track);
+    }
+
+    rg_display_write(30, 134, box_s, box_s, box_s * 2, vis_buf);
+    rg_display_drain();
+
+    if (!drawn_ok) {
+        rg_gui_draw_text_box(30, 134, box_s, box_s, MUSIC_BG, RG_COLOR_WHITE, "NO THUMBNAIL", 1);
+        rg_display_drain();
+    }
+}
+
 static void draw_player_visualizer(void)
 {
-    if (!vis_buf) return;
+    if (show_thumbnail || !vis_buf) return;
     init_fft_state();
 
     int box_s = 180;
@@ -862,7 +1035,11 @@ static void draw_player_ui_full(void)
     rg_display_drain();
     player_ui_top_dirty = true;
     draw_player_top_area(true);
-    draw_player_visualizer();
+    if (show_thumbnail) {
+        draw_player_thumbnail();
+    } else {
+        draw_player_visualizer();
+    }
     if (vol_bar_visible) {
         draw_volume_bar();
     }
@@ -915,14 +1092,15 @@ static void play_track(int index)
         int t_len = strlen(t_start);
         const char *dot = strrchr(t_start, '.');
         if (dot) t_len = (int)(dot - t_start);
-        if (t_len < sizeof(info_title_str)) {
-            strncpy(info_title_str, t_start, t_len);
-            info_title_str[t_len] = '\0';
-        }
+        int copy_len = t_len < sizeof(info_title_str) - 1 ? t_len : sizeof(info_title_str) - 1;
+        strncpy(info_title_str, t_start, copy_len);
+        info_title_str[copy_len] = '\0';
     }
 
     // Check for embedded thumbnail (ID3v2 APIC) and Artist tag (TPE1 / Vorbis)
     {
+        current_apic_offset = 0;
+        current_apic_size = 0;
         FILE *f = fopen(path, "rb");
         if (f) {
             uint8_t hdr[10];
@@ -936,61 +1114,97 @@ static void play_track(int index)
                            ((uint32_t)(hdr[7] & 0x7F) << 14) |
                            ((uint32_t)(hdr[8] & 0x7F) << 7)  |
                            ((uint32_t)(hdr[9] & 0x7F));
-                uint32_t scan_len = id3_size < 8192 ? id3_size : 8192;
-                uint8_t *buf = malloc(scan_len);
-                if (buf) {
-                    fseek(f, 10, SEEK_SET);
-                    size_t got = fread(buf, 1, scan_len, f);
-                    size_t idx = 0;
-                    if ((hdr[5] & 0x40) && got >= 4) {
-                        uint32_t ext_size = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) | ((uint32_t)buf[2] << 8) | buf[3];
+                
+                uint32_t pos = 10;
+                if (hdr[5] & 0x40) { // Extended header
+                    uint8_t ext_hdr[4];
+                    if (fread(ext_hdr, 1, 4, f) == 4) {
+                        uint32_t ext_size = ((uint32_t)ext_hdr[0] << 24) | ((uint32_t)ext_hdr[1] << 16) | ((uint32_t)ext_hdr[2] << 8) | ext_hdr[3];
                         if (hdr[3] == 4) {
-                            ext_size = ((uint32_t)(buf[0] & 0x7F) << 21) | ((uint32_t)(buf[1] & 0x7F) << 14) | ((uint32_t)(buf[2] & 0x7F) << 7) | (uint32_t)(buf[3] & 0x7F);
+                            ext_size = ((uint32_t)(ext_hdr[0] & 0x7F) << 21) | ((uint32_t)(ext_hdr[1] & 0x7F) << 14) | ((uint32_t)(ext_hdr[2] & 0x7F) << 7) | (uint32_t)(ext_hdr[3] & 0x7F);
                         }
-                        if (ext_size + 4 <= got) idx += ext_size;
+                        pos += ext_size;
                     }
-                    while (idx + 10 <= got && idx < id3_size) {
-                        char id[5] = { (char)buf[idx], (char)buf[idx+1], (char)buf[idx+2], (char)buf[idx+3], '\0' };
-                        if (id[0] == 0 || !isalnum((unsigned char)id[0])) break;
-                        uint32_t f_size = ((uint32_t)buf[idx+4] << 24) | ((uint32_t)buf[idx+5] << 16) | ((uint32_t)buf[idx+6] << 8) | buf[idx+7];
-                        if (hdr[3] == 4) {
-                            f_size = ((uint32_t)(buf[idx+4] & 0x7F) << 21) | ((uint32_t)(buf[idx+5] & 0x7F) << 14) | ((uint32_t)(buf[idx+6] & 0x7F) << 7) | (uint32_t)(buf[idx+7] & 0x7F);
-                        }
-                        if (f_size == 0 || idx + 10 + f_size > got) break;
+                }
 
-                        if (strcmp(id, "APIC") == 0) {
-                            has_apic = true;
-                        } else if ((strcmp(id, "TPE1") == 0 || strcmp(id, "TIT2") == 0) && f_size > 1 && f_size < 128) {
-                            uint8_t enc = buf[idx + 10];
+                while (pos + 10 <= 10 + id3_size) {
+                    if (fseek(f, pos, SEEK_SET) != 0) break;
+                    if (fread(hdr, 1, 10, f) != 10) break;
+                    char id[5] = { (char)hdr[0], (char)hdr[1], (char)hdr[2], (char)hdr[3], '\0' };
+                    if (id[0] == 0 || !isalnum((unsigned char)id[0])) break;
+                    
+                    uint32_t f_size = ((uint32_t)hdr[4] << 24) | ((uint32_t)hdr[5] << 16) | ((uint32_t)hdr[6] << 8) | hdr[7];
+                    if (hdr[3] == 4) {
+                        f_size = ((uint32_t)(hdr[4] & 0x7F) << 21) | ((uint32_t)(hdr[5] & 0x7F) << 14) | ((uint32_t)(hdr[6] & 0x7F) << 7) | (uint32_t)(hdr[7] & 0x7F);
+                    }
+                    if (f_size == 0 || pos + 10 + f_size > 10 + id3_size) break;
+
+                    if (strcmp(id, "APIC") == 0) {
+                        has_apic = true;
+                        static uint8_t apic_hdr[4096];
+                        uint32_t read_len = f_size < sizeof(apic_hdr) ? f_size : sizeof(apic_hdr);
+                        if (fread(apic_hdr, 1, read_len, f) == read_len) {
+                            for (uint32_t k = 0; k + 2 <= read_len; k++) {
+                                if (apic_hdr[k] == 0xFF && apic_hdr[k+1] == 0xD8) {
+                                    current_apic_offset = pos + 10 + k;
+                                    current_apic_size = f_size - k;
+                                    break;
+                                } else if (k + 4 <= read_len && apic_hdr[k] == 0x89 && apic_hdr[k+1] == 0x50 && apic_hdr[k+2] == 0x4E && apic_hdr[k+3] == 0x47) {
+                                    current_apic_offset = pos + 10 + k;
+                                    current_apic_size = f_size - k;
+                                    break;
+                                }
+                            }
+                            if (current_apic_offset == 0) {
+                                ESP_LOGW(TAG, "APIC tag found (%lu bytes), but JPEG/PNG magic not found in first %lu bytes!", (unsigned long)f_size, (unsigned long)read_len);
+                            }
+                        } else {
+                            ESP_LOGW(TAG, "Failed to read %lu bytes of APIC tag", (unsigned long)read_len);
+                        }
+                    } else if ((strcmp(id, "TPE1") == 0 || strcmp(id, "TIT2") == 0) && f_size > 1 && f_size < 1024) {
+                        uint8_t tag_buf[256];
+                        uint32_t r_len = f_size < sizeof(tag_buf) ? f_size : sizeof(tag_buf);
+                        if (fread(tag_buf, 1, r_len, f) == r_len) {
+                            if (f_size > r_len) fseek(f, f_size - r_len, SEEK_CUR);
+                            uint8_t enc = tag_buf[0];
                             char *dest = (strcmp(id, "TPE1") == 0) ? info_artist_str : info_title_str;
                             int max_len = (strcmp(id, "TPE1") == 0) ? 60 : 120;
                             int out_idx = 0;
                             if (enc == 0 || enc == 3) {
-                                for (uint32_t k = 1; k < f_size && out_idx < max_len; k++) {
-                                    char c = (char)buf[idx + 10 + k];
+                                for (uint32_t k = 1; k < r_len && out_idx < max_len; k++) {
+                                    char c = (char)tag_buf[k];
                                     if (c == '\0') break;
                                     if ((unsigned char)c >= 32) dest[out_idx++] = c;
                                 }
                             } else if (enc == 1 || enc == 2) {
-                                uint32_t start_k = (enc == 1 && f_size >= 3) ? 3 : 1;
-                                for (uint32_t k = start_k; k + 1 < f_size && out_idx < max_len; k += 2) {
-                                    char c = (char)buf[idx + 10 + (enc == 2 ? k + 1 : k)];
-                                    if (c == '\0' && buf[idx + 10 + k + 1] == '\0') break;
-                                    if ((unsigned char)c >= 32 && buf[idx + 10 + (enc == 2 ? k : k + 1)] == 0) {
+                                uint32_t start_k = (enc == 1 && r_len >= 3) ? 3 : 1;
+                                for (uint32_t k = start_k; k + 1 < r_len && out_idx < max_len; k += 2) {
+                                    char c = (char)tag_buf[enc == 2 ? k + 1 : k];
+                                    if (c == '\0' && tag_buf[k + 1] == '\0') break;
+                                    if ((unsigned char)c >= 32 && tag_buf[enc == 2 ? k : k + 1] == 0) {
                                         dest[out_idx++] = c;
                                     }
                                 }
                             }
                             if (out_idx > 0) dest[out_idx] = '\0';
                         }
-                        idx += 10 + f_size;
                     }
+                    pos += 10 + f_size;
+                }
+            }
+
+            if (!has_id3 || strcmp(info_artist_str, "Unknown Artist") == 0 || info_title_str[0] == '\0') {
+                fseek(f, 0, SEEK_SET);
+                uint32_t fb_len = 8192;
+                uint8_t *fb_buf = malloc(fb_len);
+                if (fb_buf) {
+                    size_t got = fread(fb_buf, 1, fb_len, f);
                     if (strcmp(info_artist_str, "Unknown Artist") == 0) {
                         for (size_t i = 0; i + 7 < got; i++) {
-                            if (strncasecmp((const char *)&buf[i], "artist=", 7) == 0) {
+                            if (strncasecmp((const char *)&fb_buf[i], "artist=", 7) == 0) {
                                 int out_idx = 0;
                                 for (size_t k = i + 7; k < got && out_idx < 60; k++) {
-                                    char c = (char)buf[k];
+                                    char c = (char)fb_buf[k];
                                     if (c < 32 || c == 0 || c == 0xFF) break;
                                     info_artist_str[out_idx++] = c;
                                 }
@@ -1001,10 +1215,10 @@ static void play_track(int index)
                     }
                     if (info_title_str[0] == '\0') {
                         for (size_t i = 0; i + 6 < got; i++) {
-                            if (strncasecmp((const char *)&buf[i], "title=", 6) == 0) {
+                            if (strncasecmp((const char *)&fb_buf[i], "title=", 6) == 0) {
                                 int out_idx = 0;
                                 for (size_t k = i + 6; k < got && out_idx < 120; k++) {
-                                    char c = (char)buf[k];
+                                    char c = (char)fb_buf[k];
                                     if (c < 32 || c == 0 || c == 0xFF) break;
                                     info_title_str[out_idx++] = c;
                                 }
@@ -1013,13 +1227,15 @@ static void play_track(int index)
                             }
                         }
                     }
-                    free(buf);
+                    free(fb_buf);
                 }
             }
             fclose(f);
-            ESP_LOGI(TAG, "Thumbnail: ID3=%s, APIC=%s, ID3size=%lu, Artist='%s', Title='%s'",
+            ESP_LOGI(TAG, "Thumbnail: ID3=%s, APIC=%s (off=%lu, size=%lu), ID3size=%lu, Artist='%s', Title='%s'",
                      has_id3 ? "YES" : "NO",
                      has_apic ? "YES" : "NO",
+                     (unsigned long)current_apic_offset,
+                     (unsigned long)current_apic_size,
                      (unsigned long)id3_size,
                      info_artist_str,
                      info_title_str);
@@ -1233,7 +1449,6 @@ void app_music_handle_input(button_event_t event)
             }
             break;
         case BTN_ENTER:
-        case BTN_A:
             if (total_tracks > 0) {
                 if (in_player_ui) {
                     if (is_playing) {
@@ -1241,7 +1456,36 @@ void app_music_handle_input(button_event_t event)
                     } else if (pipeline_has_run) {
                         resume_current_track();
                     }
-                    draw_player_visualizer();
+                    if (show_thumbnail) {
+                        draw_player_thumbnail();
+                    } else {
+                        draw_player_visualizer();
+                    }
+                } else {
+                    if (selected_index == current_track && is_playing) {
+                        // Already playing, just open player ui
+                    } else if (selected_index == current_track && !is_playing && pipeline_has_run) {
+                        resume_current_track();
+                    } else {
+                        play_track(selected_index);
+                    }
+                    in_player_ui = true;
+                    player_scroll_char_offset = 0;
+                    player_scroll_timer = esp_timer_get_time() / 1000;
+                    draw_player_ui_full();
+                }
+            }
+            break;
+        case BTN_A:
+            if (total_tracks > 0) {
+                show_thumbnail = !show_thumbnail;
+                if (in_player_ui) {
+                    if (show_thumbnail) {
+                        draw_player_thumbnail();
+                    } else {
+                        if (fft_ringbuf) rb_reset(fft_ringbuf);
+                        draw_player_visualizer();
+                    }
                 } else {
                     if (selected_index == current_track && is_playing) {
                         // Already playing, just open player ui
@@ -1345,18 +1589,25 @@ void app_music_tick(void)
                 }
             }
             if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT
-                && msg.source == (void *)i2s_stream_writer
                 && msg.cmd == AEL_MSG_CMD_REPORT_STATUS
-                && (int)msg.data == AEL_STATUS_STATE_FINISHED) {
-                current_track = get_next_track_idx();
-                play_track(current_track);
-                selected_index = current_track;
-                ensure_cursor_visible();
-                scroll_char_offset = 0;
-                if (in_player_ui) {
-                    player_scroll_char_offset = 0;
-                    player_scroll_timer = esp_timer_get_time() / 1000;
-                    draw_player_ui_full();
+                && ((int)msg.data == AEL_STATUS_STATE_FINISHED || (int)msg.data == AEL_STATUS_STATE_STOPPED)) {
+                if (is_playing && (msg.source == (void *)fatfs_stream_reader || msg.source == (void *)mp3_decoder || msg.source == (void *)i2s_stream_writer)) {
+                    static int64_t last_auto_advance = 0;
+                    int64_t now_ms = esp_timer_get_time() / 1000;
+                    if (now_ms - last_auto_advance >= 1500) {
+                        last_auto_advance = now_ms;
+                        ESP_LOGI(TAG, "Element finished/stopped (source=%p, status=%d), auto-advancing to next track", msg.source, (int)msg.data);
+                        current_track = get_next_track_idx();
+                        play_track(current_track);
+                        selected_index = current_track;
+                        ensure_cursor_visible();
+                        scroll_char_offset = 0;
+                        if (in_player_ui) {
+                            player_scroll_char_offset = 0;
+                            player_scroll_timer = now_ms;
+                            draw_player_ui_full();
+                        }
+                    }
                 }
             }
         }
@@ -1372,7 +1623,7 @@ void app_music_tick(void)
                 draw_player_metadata();
             }
         }
-        if (now_ms - last_vis_time >= 25) {
+        if (!show_thumbnail && (now_ms - last_vis_time >= 25)) {
             last_vis_time = now_ms;
             draw_player_visualizer();
         }
