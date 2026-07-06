@@ -795,7 +795,7 @@ static void draw_player_thumbnail(void)
                                     ESP_LOGW(TAG, "Failed to allocate out_img (%d x %d)", dec_w, dec_h);
                                 }
                             } else {
-                                ESP_LOGW(TAG, "jd_prepare failed: %d (off=%lu, size=%lu)", (unsigned long)res_prep, (unsigned long)current_apic_offset, (unsigned long)current_apic_size);
+                                ESP_LOGW(TAG, "jd_prepare failed: %d (off=%lu, size=%lu)", (int)res_prep, (unsigned long)current_apic_offset, (unsigned long)current_apic_size);
                             }
                             free(pool);
                         } else {
@@ -823,7 +823,7 @@ static void draw_player_thumbnail(void)
     rg_display_drain();
 
     if (!drawn_ok) {
-        rg_gui_draw_text_box(30, 134, box_s, box_s, MUSIC_BG, RG_COLOR_WHITE, "NO THUMBNAIL", 1);
+        rg_gui_draw_text_box(30, 134, box_s, box_s, MUSIC_BG, "NO THUMBNAIL");
         rg_display_drain();
     }
 }
