@@ -118,8 +118,14 @@ static void draw_rounded_box(int x, int y, int w, int h, int r, uint16_t fill_co
             }
         }
     }
-    rg_display_write(x, y, w, h, w * 2, box_buf);
-    rg_display_drain();
+    static uint16_t dma_chunk[240 * 20] __attribute__((aligned(4)));
+    int lines_per_chunk = 20;
+    for (int cy = 0; cy < h; cy += lines_per_chunk) {
+        int lines = (cy + lines_per_chunk <= h) ? lines_per_chunk : (h - cy);
+        memcpy(dma_chunk, &box_buf[cy * w], lines * w * sizeof(uint16_t));
+        rg_display_write(x, y + cy, w, lines, w * 2, dma_chunk);
+        rg_display_drain();
+    }
 }
 
 // ---- Bookmark Logic ----

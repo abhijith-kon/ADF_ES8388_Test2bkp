@@ -12,6 +12,18 @@ static void *rg_gui_dma_malloc(size_t size)
     return ptr;
 }
 
+static void rg_gui_send_dma_chunked(int x, int y, int w, int h, const uint16_t *buf)
+{
+    static uint16_t dma_chunk[240 * 20] __attribute__((aligned(4)));
+    int lines_per_chunk = 20;
+    for (int cy = 0; cy < h; cy += lines_per_chunk) {
+        int lines = (cy + lines_per_chunk <= h) ? lines_per_chunk : (h - cy);
+        memcpy(dma_chunk, &buf[cy * w], lines * w * sizeof(uint16_t));
+        rg_display_write(x, y + cy, w, lines, w * 2, dma_chunk);
+        rg_display_drain();
+    }
+}
+
 // Global state for new primitives
 static uint16_t current_fill_color = 0xFFFF;
 static uint16_t current_stroke_color = 0xFFFF;
@@ -249,7 +261,7 @@ void rg_gui_draw_text_center(int x, int y, const char *text)
         }
     }
     
-    rg_display_write(start_x, y, total_w, char_w, total_w * 2, str_buf);
+    rg_gui_send_dma_chunked(start_x, y, total_w, char_w, str_buf);
     // Drain so str_buf slot is safe to recycle
     rg_display_drain();
 }
@@ -314,7 +326,7 @@ void rg_gui_draw_text_box(int box_x, int box_y, int box_w, int box_h,
         }
     }
 
-    rg_display_write(box_x, box_y, box_w, box_h, box_w * 2, buf);
+    rg_gui_send_dma_chunked(box_x, box_y, box_w, box_h, buf);
     // Drain so tb_buf slot is safe to recycle
     rg_display_drain();
 }
@@ -375,7 +387,7 @@ void rg_gui_draw_text_line(int box_x, int box_y, int box_w, int box_h,
         }
     }
 
-    rg_display_write(box_x, box_y, box_w, box_h, box_w * 2, buf);
+    rg_gui_send_dma_chunked(box_x, box_y, box_w, box_h, buf);
     rg_display_drain();
 }
 
@@ -484,6 +496,6 @@ void rg_gui_draw_text_scaled(int x, int y, const char *text, uint16_t color, uin
             }
         }
     }
-    rg_display_write(x, y, total_w, total_h, total_w * 2, str_buf);
+    rg_gui_send_dma_chunked(x, y, total_w, total_h, str_buf);
     rg_display_drain();
 }
