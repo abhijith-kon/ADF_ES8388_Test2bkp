@@ -315,6 +315,7 @@ static void load_page_view(void)
     if (c != EOF) ungetc(c, current_file);
 
     page_start_pos = ftell(current_file);
+    save_bookmark(page_start_pos);
     static char page_buf[420];
     memset(page_buf, 0, sizeof(page_buf));
     size_t bytes_read = fread(page_buf, 1, 400, current_file);
@@ -407,15 +408,15 @@ static void draw_page_view_ui(void)
     rg_gui_draw_text(4, 5, time_str, RG_COLOR_RGB(150, 150, 150), FILES_BG);
 
     char name_trunc[20];
-    strncpy(name_trunc, active_filename, 16);
-    name_trunc[16] = '\0';
+    strncpy(name_trunc, active_filename, 12);
+    name_trunc[12] = '\0';
     rg_gui_draw_text_center(SCREEN_W / 2, 5, name_trunc);
 
     long pos = ftell(current_file);
-    int prog = file_size > 0 ? (int)((pos * 100) / file_size) : 0;
-    char prog_str[16];
-    snprintf(prog_str, sizeof(prog_str), "%d%%", prog);
-    rg_gui_draw_text(SCREEN_W - 35, 5, prog_str, RG_COLOR_RGB(150, 150, 150), FILES_BG);
+    float prog = file_size > 0 ? ((float)pos * 100.0f / (float)file_size) : 0.0f;
+    char prog_str[32];
+    snprintf(prog_str, sizeof(prog_str), "%.2f%%", prog);
+    rg_gui_draw_text(SCREEN_W - 60, 5, prog_str, RG_COLOR_RGB(150, 150, 150), FILES_BG);
 
     rg_gui_draw_rect(0, 20, SCREEN_W, 1, RG_COLOR_RGB(80, 80, 80));
 
@@ -498,20 +499,38 @@ static void display_word(void)
     strcpy(right, current_word + orp_idx + 1);
 
     // Clear word display area
-    rg_gui_draw_rect(0, 130, SCREEN_W, 40, FILES_BG);
-    rg_gui_set_font_size(16);
+    rg_gui_draw_rect(0, 120, SCREEN_W, 60, FILES_BG);
 
-    int center_x = 120;
-    int left_w = strlen(left) * 16;
-    int x_start = center_x - left_w - 8;
+    // Increase ONLY the RSVP word font
+    int word_font_size = 24;
+    rg_gui_set_font_size(word_font_size);
+    if (len * word_font_size > 232) {
+        word_font_size = 16;
+        rg_gui_set_font_size(word_font_size);
+        if (len * word_font_size > 232) {
+            word_font_size = 8;
+            rg_gui_set_font_size(word_font_size);
+        }
+    }
+
+    // Calculate actual rendered width (font advance)
+    int orp_w = rg_gui_get_text_width(orp);
+    int left_w = rg_gui_get_text_width(left);
+
+    int center_x = SCREEN_W / 2;
+    int orp_x = center_x - (orp_w / 2);
+    int word_y = 150 - (word_font_size / 2);
 
     if (strlen(left) > 0) {
-        rg_gui_draw_text(x_start, 140, left, RG_COLOR_WHITE, FILES_BG);
+        rg_gui_draw_text_scaled(orp_x - left_w, word_y, left, RG_COLOR_WHITE, FILES_BG);
     }
-    rg_gui_draw_text(center_x - 8, 140, orp, RG_COLOR_RGB(255, 80, 80), FILES_BG);
+    rg_gui_draw_text_scaled(orp_x, word_y, orp, RG_COLOR_RGB(255, 60, 60), FILES_BG);
     if (strlen(right) > 0) {
-        rg_gui_draw_text(center_x + 8, 140, right, RG_COLOR_WHITE, FILES_BG);
+        rg_gui_draw_text_scaled(orp_x + orp_w, word_y, right, RG_COLOR_WHITE, FILES_BG);
     }
+
+    // Reset font size back to 8 immediately so header/footer/WPM/progress are unchanged!
+    rg_gui_set_font_size(8);
 
     int delay = 60000 / rsvp_wpm;
     char last_char = current_word[len - 1];
@@ -520,13 +539,13 @@ static void display_word(void)
     else if (last_char == '-') delay = (int)(delay * 1.2);
     rsvp_delay_ms = delay;
 
-    // Update Progress
+    // Update Progress up to 2 decimal points
     long pos = ftell(current_file);
-    int prog = file_size > 0 ? (int)((pos * 100) / file_size) : 0;
-    char prog_str[16];
-    snprintf(prog_str, sizeof(prog_str), "%d%%", prog);
-    rg_gui_set_font_size(8);
-    rg_gui_draw_text(SCREEN_W - 35, 5, prog_str, RG_COLOR_RGB(150, 150, 150), FILES_BG);
+    float prog = file_size > 0 ? ((float)pos * 100.0f / (float)file_size) : 0.0f;
+    char prog_str[32];
+    snprintf(prog_str, sizeof(prog_str), "%.2f%%", prog);
+    rg_gui_draw_rect(SCREEN_W - 65, 2, 63, 16, FILES_BG);
+    rg_gui_draw_text(SCREEN_W - 60, 5, prog_str, RG_COLOR_RGB(150, 150, 150), FILES_BG);
 }
 
 static void draw_rsvp_ui(void)
@@ -571,7 +590,9 @@ void app_files_stop(void)
 {
     ESP_LOGI(TAG, "Stopping app_files");
     if (current_file) {
-        if (app_mode == 1 || app_mode == 2) {
+        if (app_mode == 1) {
+            save_bookmark(page_start_pos);
+        } else if (app_mode == 2) {
             save_bookmark(ftell(current_file));
         }
         fclose(current_file);

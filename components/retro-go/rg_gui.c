@@ -421,3 +421,60 @@ void rg_gui_draw_filled_circle(int x0, int y0, int r)
         }
     }
 }
+
+int rg_gui_get_text_width(const char *text)
+{
+    if (!text) return 0;
+    return (int)strlen(text) * 8 * current_font_scale;
+}
+
+void rg_gui_draw_text_scaled(int x, int y, const char *text, uint16_t color, uint16_t bg_color)
+{
+    int len = strlen(text);
+    if (len == 0) return;
+    int char_w = 8 * current_font_scale;
+    int total_w = len * char_w;
+    int total_h = char_w;
+
+    static uint16_t *ts_bufs[4] = {NULL, NULL, NULL, NULL};
+    static int ts_sizes[4] = {0, 0, 0, 0};
+    static int ts_idx = 0;
+    ts_idx = (ts_idx + 1) % 4;
+
+    int needed_size = total_w * total_h * (int)sizeof(uint16_t);
+    if (needed_size > ts_sizes[ts_idx]) {
+        if (ts_bufs[ts_idx]) free(ts_bufs[ts_idx]);
+        ts_bufs[ts_idx] = malloc(needed_size);
+        ts_sizes[ts_idx] = needed_size;
+    }
+    if (!ts_bufs[ts_idx]) return;
+    uint16_t *str_buf = ts_bufs[ts_idx];
+
+    uint16_t fg_sw = ((color >> 8) | (color << 8));
+    uint16_t bg_sw = ((bg_color >> 8) | (bg_color << 8));
+
+    int pixel_count = total_w * total_h;
+    for (int i = 0; i < pixel_count; i++) str_buf[i] = bg_sw;
+
+    for (int i = 0; i < len; i++) {
+        uint8_t c = text[i];
+        if (c > 127) c = '?';
+        for (int row = 0; row < 8; row++) {
+            uint8_t bits = font8x8_basic[c][row];
+            for (int col = 0; col < 8; col++) {
+                if (!(bits & (1 << (7 - col)))) continue;
+                for (int sy = 0; sy < current_font_scale; sy++) {
+                    for (int sx = 0; sx < current_font_scale; sx++) {
+                        int px = (i * char_w) + (col * current_font_scale + sx);
+                        int py = (row * current_font_scale + sy);
+                        if (px >= 0 && px < total_w && py >= 0 && py < total_h) {
+                            str_buf[py * total_w + px] = fg_sw;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    rg_display_write(x, y, total_w, total_h, total_w * 2, str_buf);
+    rg_display_drain();
+}

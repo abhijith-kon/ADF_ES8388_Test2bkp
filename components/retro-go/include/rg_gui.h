@@ -25,5 +25,7 @@ void rg_gui_draw_text_line(int box_x, int box_y, int box_w, int box_h,
                            uint16_t bg_color, uint16_t text_color,
                            const char *text, int left_pad);
 void rg_gui_draw_filled_circle(int x0, int y0, int r);
+int rg_gui_get_text_width(const char *text);
+void rg_gui_draw_text_scaled(int x, int y, const char *text, uint16_t color, uint16_t bg_color);
 
 #endif
