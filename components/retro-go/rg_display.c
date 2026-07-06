@@ -113,12 +113,11 @@ void rg_display_write(int x, int y, int width, int height, int stride, const voi
 
 void rg_display_drain(void)
 {
-    // With trans_queue_depth = 1 and quad buffering, DMA transfers complete safely.
-    // Sending NOP command (0x00) over SPI after every primitive draw caused TFT controller
-    // driver glitches resulting in white screen flashes and flickering on redraws.
-    // Yielding 200us allows any in-flight SPI DMA bus transaction to finish cleanly
-    // without sending bogus commands to the display panel.
-    esp_rom_delay_us(200);
+    // Calling tx_param with cmd -1 blocks until all queued DMA transfers finish,
+    // without transmitting any command or NOP byte over SPI to the ILI9341 panel.
+    if (io_handle) {
+        esp_lcd_panel_io_tx_param(io_handle, -1, NULL, 0);
+    }
 }
 
 void rg_display_set_config(rg_display_config_t config)

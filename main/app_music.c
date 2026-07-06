@@ -764,13 +764,27 @@ static UINT tjpg_out_func(JDEC *jd, void *bitmap, JRECT *rect)
     return 1;
 }
 
+static void send_vis_buf_to_display(void)
+{
+    if (!vis_buf) return;
+    static uint16_t dma_line_buf[180 * 10] __attribute__((aligned(4)));
+    int box_s = 180;
+    int lines_per_chunk = 10;
+    for (int y = 0; y < box_s; y += lines_per_chunk) {
+        int lines = (y + lines_per_chunk <= box_s) ? lines_per_chunk : (box_s - y);
+        memcpy(dma_line_buf, &vis_buf[y * box_s], lines * box_s * sizeof(uint16_t));
+        rg_display_write(30, 134 + y, box_s, lines, box_s * 2, dma_line_buf);
+        rg_display_drain();
+    }
+}
+
 static void draw_player_thumbnail(void)
 {
     ESP_LOGI(TAG, "draw_player_thumbnail called: show=%d, track=%d, apic_off=%lu, apic_len=%lu",
              show_thumbnail, current_track, (unsigned long)current_apic_offset, (unsigned long)current_apic_size);
 
     if (!vis_buf) {
-        vis_buf = heap_caps_malloc(180 * 180 * sizeof(uint16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        vis_buf = heap_caps_malloc(180 * 180 * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!vis_buf) vis_buf = malloc(180 * 180 * sizeof(uint16_t));
     }
     if (!vis_buf) return;
@@ -874,8 +888,7 @@ static void draw_player_thumbnail(void)
         ESP_LOGW(TAG, "No valid APIC data for thumbnail: off=%lu, size=%lu, track=%d", (unsigned long)current_apic_offset, (unsigned long)current_apic_size, current_track);
     }
 
-    rg_display_write(30, 134, box_s, box_s, box_s * 2, vis_buf);
-    rg_display_drain();
+    send_vis_buf_to_display();
 
     if (!drawn_ok) {
         rg_gui_draw_text_box(30, 134, box_s, box_s, MUSIC_BG, "NO THUMBNAIL");
@@ -1076,14 +1089,13 @@ static void draw_player_visualizer(void)
         }
     }
 
-    rg_display_write(30, 134, box_s, box_s, box_s * 2, vis_buf);
-    rg_display_drain();
+    send_vis_buf_to_display();
 }
 
 static void draw_player_ui_full(void)
 {
     if (!vis_buf) {
-        vis_buf = heap_caps_malloc(180 * 180 * sizeof(uint16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        vis_buf = heap_caps_malloc(180 * 180 * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!vis_buf) vis_buf = malloc(180 * 180 * sizeof(uint16_t));
     }
     rg_gui_clear(MUSIC_BG);
