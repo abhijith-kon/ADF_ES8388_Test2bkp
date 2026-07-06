@@ -103,6 +103,7 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **Song List UI Sky-Blue Border & Partial Redraw Protection:** Restored the sky-blue rounded border box around the playlist view and updated partial slot redraws (`draw_list_item`) to restrict rectangle background clearing strictly to the inner list width (`228px`), preventing scrolling or item navigation from erasing the vertical borders.
 - **DS3231 Hardware RTC Sync:** Added hardware RTC initialization and synchronization (`rtc_sync_from_ds3231`) over I2C on boot in `main.c`, ensuring system timestamps (`settimeofday`) are accurately maintained.
 - **GUI Rectangle Bounds Checking:** Added safety bounds checks in `rg_gui_draw_rect()` to prevent DMA buffer overflow or invalid line calculations on excessive widths/heights.
+- **SD Card Text Reader & RSVP Speed Reader (Files App):** Created a dedicated Files application (`app_files.c`) accessible from the Home Screen (`selected == 0`). Features SD card `.txt` file scanning with iPod-style wheel navigation, a word-wrapped Page Reader with automatic smart punctuation sanitization and bookmarking (`.BMK`), and a rapid serial visual presentation (RSVP) speed reader mode that flashes words individually at adjustable WPM speeds (100 to 600 WPM) with Optimal Recognition Point (ORP) highlighting.
 
 ### Known Issues / In-Progress
 - **UI/UX Aesthetics & Design:** The current UI layout is functional and responsive; ongoing visual refinements will continue based on user feedback.

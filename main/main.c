@@ -16,12 +16,14 @@
 // Apps
 #include "home_rg_gui.h"
 #include "app_music.h"
+#include "app_files.h"
 #include "ui.h" // Retro-OS games launcher
 
 static const char *TAG = "MAIN";
 
 typedef enum {
     APP_HOME,
+    APP_FILES,
     APP_MUSIC,
     APP_GAMES
 } app_state_t;
@@ -159,6 +161,7 @@ void app_main(void)
     }
     
     // Init apps
+    app_files_init();
     app_music_init(board_handle->audio_hal);
     home_ui_init();
 
@@ -173,7 +176,11 @@ void app_main(void)
             else if (event == BTN_RIGHT) home_ui_move_right();
             else if (event == BTN_ENTER) {
                 int selected = home_ui_get_selected();
-                if (selected == 1) { // APP_MUSIC
+                if (selected == 0) { // APP_FILES
+                    current_app = APP_FILES;
+                    app_files_start();
+                }
+                else if (selected == 1) { // APP_MUSIC
                     current_app = APP_MUSIC;
                     app_music_start();
                 } 
@@ -183,6 +190,17 @@ void app_main(void)
                 }
             }
         } 
+        else if (current_app == APP_FILES) {
+            if (event == BTN_ESCAPE && !app_files_is_in_page_view()) {
+                app_files_stop();
+                current_app = APP_HOME;
+                rg_display_drain();
+                rg_gui_clear(0x0000);
+                home_ui_force_redraw();
+            } else {
+                app_files_handle_input(event);
+            }
+        }
         else if (current_app == APP_MUSIC) {
             if (event == BTN_ESCAPE && !app_music_is_in_player_ui()) {
                 app_music_stop();
@@ -215,6 +233,9 @@ void app_main(void)
         } 
         else if (current_app == APP_MUSIC) {
             app_music_tick();
+        }
+        else if (current_app == APP_FILES) {
+            app_files_tick();
         }
         else if (current_app == APP_GAMES) {
             ui_update();
