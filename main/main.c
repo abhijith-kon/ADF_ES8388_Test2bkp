@@ -29,6 +29,81 @@ typedef enum {
 static app_state_t current_app = APP_HOME;
 static audio_board_handle_t board_handle = NULL;
 
+#include <time.h>
+#include <sys/time.h>
+#include "i2c_bus.h"
+
+#define DS3231_ADDR (0x68 << 1)
+
+static uint8_t bcd2dec(uint8_t val) { return ((val / 16 * 10) + (val % 16)); }
+static uint8_t dec2bcd(uint8_t val) { return ((val / 10 * 16) + (val % 10)); }
+
+static void rtc_set_time_ds3231(i2c_bus_handle_t bus, int year, int mon, int mday, int hour, int min, int sec) {
+    uint8_t data[7];
+    data[0] = dec2bcd(sec);
+    data[1] = dec2bcd(min);
+    data[2] = dec2bcd(hour);
+    data[3] = 0x01; // Day of week (1-7)
+    data[4] = dec2bcd(mday);
+    data[5] = dec2bcd(mon);
+    data[6] = dec2bcd(year % 100);
+    uint8_t reg = 0x00;
+    esp_err_t err = i2c_bus_write_bytes(bus, DS3231_ADDR, &reg, 1, data, 7);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "RTC DS3231 time initialized to %04d-%02d-%02d %02d:%02d:%02d", year, mon, mday, hour, min, sec);
+    } else {
+        ESP_LOGW(TAG, "Failed to write DS3231 time over i2c_bus (err=%d)", err);
+    }
+}
+
+static void rtc_sync_from_ds3231(void) {
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = 4,
+        .scl_io_num = 5,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = 100000,
+    };
+    i2c_bus_handle_t bus = i2c_bus_create(I2C_NUM_0, &conf);
+    if (!bus) {
+        ESP_LOGE(TAG, "Failed to get i2c_bus handle for RTC");
+        return;
+    }
+    uint8_t data[7] = {0};
+    uint8_t reg = 0x00;
+    esp_err_t err = i2c_bus_read_bytes(bus, DS3231_ADDR, &reg, 1, data, 7);
+    
+    if (err == ESP_OK) {
+        int year = bcd2dec(data[6]) + 2000;
+        int mon  = bcd2dec(data[5] & 0x1F);
+        int mday = bcd2dec(data[4]);
+        int hour = bcd2dec(data[2] & 0x3F);
+        int min  = bcd2dec(data[1]);
+        int sec  = bcd2dec(data[0] & 0x7F);
+
+        if (year < 2024 || mon < 1 || mon > 12 || mday < 1 || mday > 31) {
+            ESP_LOGW(TAG, "RTC DS3231 time invalid (%04d-%02d-%02d), initializing default timestamp", year, mon, mday);
+            rtc_set_time_ds3231(bus, 2026, 7, 6, 12, 0, 0);
+            year = 2026; mon = 7; mday = 6; hour = 12; min = 0; sec = 0;
+        }
+
+        struct tm rtc_tm = {
+            .tm_sec  = sec,
+            .tm_min  = min,
+            .tm_hour = hour,
+            .tm_mday = mday,
+            .tm_mon  = mon - 1,
+            .tm_year = year - 1900
+        };
+        struct timeval tv = { .tv_sec = mktime(&rtc_tm), .tv_usec = 0 };
+        settimeofday(&tv, NULL);
+        ESP_LOGI(TAG, "RTC DS3231 synced OK: %04d-%02d-%02d %02d:%02d:%02d", year, mon, mday, hour, min, sec);
+    } else {
+        ESP_LOGW(TAG, "Failed to communicate with RTC DS3231 over i2c_bus (err=%d)", err);
+    }
+}
+
 static void es8388_fix_output_mixer(void) {
     es8388_write_reg(ES8388_DACCONTROL17, 0x80);
     es8388_write_reg(ES8388_DACCONTROL20, 0x80);
@@ -52,6 +127,7 @@ void app_main(void)
         audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_DECODE, AUDIO_HAL_CTRL_START);
         audio_hal_set_volume(board_handle->audio_hal, 80);
         es8388_fix_output_mixer();
+        rtc_sync_from_ds3231();
     } else {
         ESP_LOGE(TAG, "Audio board init failed!");
     }

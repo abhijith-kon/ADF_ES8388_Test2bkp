@@ -135,11 +135,13 @@ void rg_gui_draw_text(int x, int y, const char *text, uint16_t color, uint16_t b
 
 void rg_gui_draw_rect(int x, int y, int w, int h, uint16_t color)
 {
+    if (w <= 0 || h <= 0) return;
     // Pre-allocated static buffer — never freed, prevents DMA corruption on realloc.
     // Max 2048 uint16_t = 4096 bytes, sufficient for any width (max_lines = 4096/(w*2)).
     static uint16_t rect_buf[2048] __attribute__((aligned(4)));
 
     int max_pixels = (int)(sizeof(rect_buf) / sizeof(rect_buf[0]));
+    if (w > max_pixels) return;
     int max_lines = max_pixels / w;
     if (max_lines == 0) max_lines = 1;
     if (max_lines > h) max_lines = h;

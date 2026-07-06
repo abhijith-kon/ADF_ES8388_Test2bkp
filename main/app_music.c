@@ -68,16 +68,17 @@ static int current_volume = 80;
 
 #define SEP2_Y           256
 
-#define MINI_TRACK_Y     262
-#define MINI_TRACK_H     12
+#define MINI_BOX_X       6
+#define MINI_BOX_Y       258
+#define MINI_BOX_W       228
+#define MINI_BOX_H       44
+#define MINI_BOX_BG      RG_COLOR_RGB(140, 60, 220)
+#define MINI_BOX_BORDER  RG_COLOR_RGB(180, 100, 255)
 
-#define MINI_PROGRESS_Y  280
-#define MINI_PROGRESS_H  4
-#define PROGRESS_BG_CLR  RG_COLOR_RGB(40, 40, 40)
-#define PROGRESS_FG_CLR  RG_COLOR_RGB(30, 200, 80)
-
-#define MINI_STATUS_Y    290
-#define MINI_STATUS_H    12
+#define MINI_TRACK_X     12
+#define MINI_TRACK_Y     272
+#define MINI_TRACK_W     216
+#define MINI_TRACK_H     16
 
 // ---- UI State ----
 static int selected_index = 0;
@@ -89,7 +90,6 @@ static int64_t scroll_timer = 0;
 #define MAX_NAME_CHARS     27
 
 static size_t current_track_bytes = 0;
-static int64_t progress_timer = 0;
 
 static bool list_full_dirty = true;
 static bool scroll_only_dirty = false;
@@ -330,17 +330,65 @@ static void init_audio_pipeline(void)
 }
 
 // ---- Navigation ----
+static void format_clean_song_name(const char *raw, char *out, size_t max_len)
+{
+    if (!raw || !out || max_len == 0) return;
+    strncpy(out, raw, max_len - 1);
+    out[max_len - 1] = '\0';
+    char *ext = strrchr(out, '.');
+    if (ext && (strcasecmp(ext, ".mp3") == 0 || strcasecmp(ext, ".flac") == 0 ||
+                strcasecmp(ext, ".wav") == 0 || strcasecmp(ext, ".m4a") == 0 ||
+                strcasecmp(ext, ".aac") == 0)) {
+        *ext = '\0';
+    }
+}
+
+static void draw_rounded_box(int x, int y, int w, int h, int r, uint16_t fill_color, uint16_t border_color, int border_width)
+{
+    static uint16_t *box_buf = NULL;
+    static int box_buf_cap = 0;
+    int needed = w * h * (int)sizeof(uint16_t);
+    if (needed > box_buf_cap) {
+        if (box_buf) free(box_buf);
+        box_buf = malloc(needed);
+        box_buf_cap = needed;
+    }
+    if (!box_buf) return;
+
+    uint16_t fill_sw = (uint16_t)((fill_color >> 8) | (fill_color << 8));
+    uint16_t border_sw = (uint16_t)((border_color >> 8) | (border_color << 8));
+
+    for (int py = 0; py < h; py++) {
+        int cy = 0;
+        if (py < r) cy = r - 1 - py;
+        else if (py >= h - r) cy = py - (h - r);
+
+        int dx = r;
+        if (cy > 0) {
+            float fdx = sqrtf((float)(r * r - cy * cy));
+            dx = (int)(fdx + 0.5f);
+        }
+        int lx = r - dx;
+        int rx = w - 1 - (r - dx);
+
+        for (int px = 0; px < w; px++) {
+            if (px < lx || px > rx) {
+                box_buf[py * w + px] = 0x0000; // Black background outside corners
+            } else if (border_width > 0 && (py < border_width || py >= h - border_width || px < lx + border_width || px > rx - border_width)) {
+                box_buf[py * w + px] = border_sw;
+            } else {
+                box_buf[py * w + px] = fill_sw;
+            }
+        }
+    }
+    rg_display_write(x, y, w, h, w * 2, box_buf);
+    rg_display_drain();
+}
+
 static void ensure_cursor_visible(void)
 {
-    if (total_tracks <= VISIBLE_ITEMS) {
-        view_start = 0;
-        return;
-    }
-    if (selected_index < view_start) {
-        view_start = selected_index;
-    } else if (selected_index >= view_start + VISIBLE_ITEMS) {
-        view_start = selected_index - VISIBLE_ITEMS + 1;
-    }
+    // In iPod wheel design, the highlight is always fixed at row index 2 (out of 0..5)
+    view_start = selected_index - 2;
 }
 
 // ---- Progress ----
@@ -356,46 +404,33 @@ static float get_playback_progress(void)
 }
 
 // ---- Drawing ----
-static void draw_progress_bar(void)
-{
-    float progress = get_playback_progress();
-    int fill_w = (int)(progress * SCREEN_W);
-    if (fill_w < 0) fill_w = 0;
-    if (fill_w > SCREEN_W) fill_w = SCREEN_W;
-
-    static uint16_t prog_buf[240 * 4] __attribute__((aligned(4)));
-    uint16_t bg_sw = (uint16_t)((PROGRESS_BG_CLR >> 8) | (PROGRESS_BG_CLR << 8));
-    uint16_t fg_sw = (uint16_t)((PROGRESS_FG_CLR >> 8) | (PROGRESS_FG_CLR << 8));
-
-    for (int y = 0; y < MINI_PROGRESS_H; y++) {
-        for (int x = 0; x < SCREEN_W; x++) {
-            prog_buf[y * SCREEN_W + x] = (x < fill_w) ? fg_sw : bg_sw;
-        }
-    }
-    rg_display_write(0, MINI_PROGRESS_Y, SCREEN_W, MINI_PROGRESS_H, SCREEN_W * 2, prog_buf);
-    rg_display_drain();
-}
-
 static void draw_list_item(int slot)
 {
     int track_idx = view_start + slot;
-    int y = LIST_Y + slot * LIST_ITEM_H;
+    int y = 31 + slot * 33;
+    bool is_sel = (slot == 2); // Highlight never moves; always at row 2
 
-    if (track_idx >= total_tracks) {
-        rg_gui_draw_rect(0, y, SCREEN_W, LIST_ITEM_H, MUSIC_BG);
+    if (track_idx < 0 || track_idx >= total_tracks) {
+        if (is_sel) {
+            draw_rounded_box(6, y + 1, 228, 31, 6, RG_COLOR_RGB(70, 150, 255), RG_COLOR_RGB(70, 150, 255), 0);
+            rg_gui_set_font_size(8);
+            rg_gui_draw_text_line(12, y + 12, 216, 16, RG_COLOR_RGB(70, 150, 255), RG_COLOR_WHITE, "  No Track", 8);
+        } else {
+            rg_gui_draw_rect(6, y, 228, 33, RG_COLOR_BLACK);
+            if (slot < 5 && slot != 1 && slot != 2) {
+                rg_gui_draw_rect(14, y + 32, 212, 1, RG_COLOR_RGB(40, 40, 45));
+            }
+        }
         return;
     }
 
-    bool is_sel = (track_idx == selected_index);
-    bool is_cur_play = (track_idx == current_track && is_playing);
-    bool is_cur_pause = (track_idx == current_track && !is_playing && pipeline_has_run);
+    uint16_t bg = is_sel ? RG_COLOR_RGB(70, 150, 255) : RG_COLOR_BLACK;
+    uint16_t fg = RG_COLOR_WHITE;
 
-    uint16_t bg = is_sel ? HIGHLIGHT_BG : MUSIC_BG;
-    uint16_t fg = is_cur_play ? PLAYING_CLR : (is_cur_pause ? PAUSED_CLR : RG_COLOR_WHITE);
-
-    const char *prefix = (is_cur_play || is_cur_pause) ? "> " : "  ";
-    const char *name = playlist[track_idx];
-    int name_len = strlen(name);
+    const char *raw_name = playlist[track_idx];
+    char clean_name[128];
+    format_clean_song_name(raw_name, clean_name, sizeof(clean_name));
+    int name_len = strlen(clean_name);
 
     int ofs = is_sel ? scroll_char_offset : 0;
     int max_ofs = name_len - MAX_NAME_CHARS;
@@ -403,14 +438,31 @@ static void draw_list_item(int slot)
     if (ofs > max_ofs) ofs = max_ofs;
 
     char display[128];
-    snprintf(display, sizeof(display), "%s%s", prefix, name + ofs);
+    snprintf(display, sizeof(display), "%s", clean_name + ofs);
+
+    if (is_sel) {
+        draw_rounded_box(6, y + 1, 228, 31, 6, bg, bg, 0);
+    } else {
+        rg_gui_draw_rect(6, y, 228, 33, RG_COLOR_BLACK);
+    }
+
+    int disp_len = strlen(display);
+    int text_w = disp_len * 8;
+    int left_pad = (228 - text_w) / 2;
+    if (left_pad < 0) left_pad = 0;
 
     rg_gui_set_font_size(8);
-    rg_gui_draw_text_line(0, y, SCREEN_W, LIST_ITEM_H, bg, fg, display, 4);
+    rg_gui_draw_text_line(6, y + 12, 228, 16, bg, fg, display, left_pad);
+
+    if (slot < 5 && slot != 1 && slot != 2) {
+        rg_gui_draw_rect(14, y + 32, 212, 1, RG_COLOR_RGB(40, 40, 45));
+    }
 }
 
 static void draw_song_list(void)
 {
+    // Draw outer rounded border box (232x204 at X=4, Y=28) with light cyan border and black fill
+    draw_rounded_box(4, 28, 232, 204, 12, RG_COLOR_BLACK, RG_COLOR_RGB(80, 180, 240), 2);
     rg_gui_set_font_size(8);
     for (int i = 0; i < VISIBLE_ITEMS; i++) {
         draw_list_item(i);
@@ -419,44 +471,48 @@ static void draw_song_list(void)
 
 static void draw_mini_player(void)
 {
-    // Track name with scrolling
+    // Clear bottom area below list to remove old progress bars and residual artifacts
+    rg_gui_draw_rect(0, 230, SCREEN_W, 90, MUSIC_BG);
+
+    // Draw compact outer rounded purple rectangle at bottom
+    draw_rounded_box(MINI_BOX_X, MINI_BOX_Y, MINI_BOX_W, MINI_BOX_H, 10, MINI_BOX_BG, MINI_BOX_BORDER, 2);
+
+    const char *icon = is_playing ? "> " : "|| ";
     if (pipeline_has_run && current_track < total_tracks) {
-        const char *name = strlen(info_title_str) ? info_title_str : playlist[current_track];
-        int name_len = strlen(name);
+        const char *raw_name = strlen(info_title_str) ? info_title_str : playlist[current_track];
+        char clean_name[128];
+        format_clean_song_name(raw_name, clean_name, sizeof(clean_name));
+        int name_len = strlen(clean_name);
         int ofs = 0;
         if (name_len > MINI_MAX_NAME_CHARS) {
             ofs = mini_scroll_char_offset;
             int max_ofs = name_len - MINI_MAX_NAME_CHARS;
             if (ofs > max_ofs) ofs = max_ofs;
         }
-        char display[64];
-        const char *icon = is_playing ? "> " : "= ";
-        snprintf(display, sizeof(display), "%s%s", icon, name + ofs);
+        char display[80];
+        snprintf(display, sizeof(display), "%s%s", icon, clean_name + ofs);
         rg_gui_set_font_size(8);
-        rg_gui_draw_text_line(0, MINI_TRACK_Y, SCREEN_W, MINI_TRACK_H,
-                              MUSIC_BG, RG_COLOR_WHITE, display, 8);
+        rg_gui_draw_text_line(MINI_TRACK_X, MINI_TRACK_Y, MINI_TRACK_W, MINI_TRACK_H, MINI_BOX_BG, RG_COLOR_WHITE, display, 8);
     } else {
         rg_gui_set_font_size(8);
-        rg_gui_draw_text_line(0, MINI_TRACK_Y, SCREEN_W, MINI_TRACK_H,
-                              MUSIC_BG, RG_COLOR_RGB(100, 100, 100),
-                              "  No track playing", 8);
+        rg_gui_draw_text_line(MINI_TRACK_X, MINI_TRACK_Y, MINI_TRACK_W, MINI_TRACK_H, MINI_BOX_BG, RG_COLOR_WHITE, "|| No track playing", 8);
     }
+}
 
-    // Progress bar
-    draw_progress_bar();
-
-    // Status text
-    if (pipeline_has_run) {
-        const char *status = is_playing ? "PLAYING" : "PAUSED";
-        uint16_t sc = is_playing ? PLAYING_CLR : PAUSED_CLR;
+static void draw_music_header(void)
+{
+    rg_gui_draw_rect(0, 0, SCREEN_W, SEP1_Y, MUSIC_BG);
+    rg_gui_set_font_size(16);
+    rg_gui_set_text_color(RG_COLOR_WHITE);
+    rg_gui_draw_text_box(0, TITLE_Y, SCREEN_W, TITLE_H, MUSIC_BG, "MUSIC");
+    if (is_shuffle) {
+        rg_gui_draw_rect(210, 4, 18, 16, RG_COLOR_RGB(180, 100, 255));
         rg_gui_set_font_size(8);
-        rg_gui_draw_text_line(0, MINI_STATUS_Y, SCREEN_W, MINI_STATUS_H,
-                              MUSIC_BG, sc, status, 8);
-    } else {
-        rg_gui_set_font_size(8);
-        rg_gui_draw_text_line(0, MINI_STATUS_Y, SCREEN_W, MINI_STATUS_H,
-                              MUSIC_BG, SEP_COLOR, "STOPPED", 8);
+        rg_gui_set_text_color(RG_COLOR_BLACK);
+        rg_gui_set_fill_color(RG_COLOR_RGB(180, 100, 255));
+        rg_gui_draw_text_center(210 + 9, 4 + 4, "S");
     }
+    rg_gui_draw_rect(0, SEP1_Y, SCREEN_W, 1, SEP_COLOR);
 }
 
 static void draw_music_full_ui(void)
@@ -464,15 +520,8 @@ static void draw_music_full_ui(void)
     rg_gui_clear(MUSIC_BG);
     rg_display_drain();
 
-    // Title
-    rg_gui_set_font_size(16);
-    rg_gui_set_text_color(RG_COLOR_WHITE);
-    rg_gui_draw_text_box(0, TITLE_Y, SCREEN_W, TITLE_H, MUSIC_BG, is_shuffle ? "MUSIC [SHUFFLE]" : "MUSIC PLAYER");
+    draw_music_header();
 
-    // Separator below title
-    rg_gui_draw_rect(0, SEP1_Y, SCREEN_W, 1, SEP_COLOR);
-
-    // Song list
     if (total_tracks > 0) {
         draw_song_list();
     } else {
@@ -482,10 +531,6 @@ static void draw_music_full_ui(void)
                               "  No MP3 files found", 4);
     }
 
-    // Separator above mini player
-    rg_gui_draw_rect(0, SEP2_Y, SCREEN_W, 1, SEP_COLOR);
-
-    // Mini player
     draw_mini_player();
 
     list_full_dirty = false;
@@ -496,8 +541,9 @@ static void draw_music_full_ui(void)
 static void scroll_tick(void)
 {
     if (total_tracks == 0) return;
-    const char *name = playlist[selected_index];
-    int name_len = strlen(name);
+    char clean_name[128];
+    format_clean_song_name(playlist[selected_index], clean_name, sizeof(clean_name));
+    int name_len = strlen(clean_name);
     if (name_len <= MAX_NAME_CHARS) {
         scroll_char_offset = 0;
         return;
@@ -517,8 +563,10 @@ static void scroll_tick(void)
 static void draw_player_title(void)
 {
     if (current_track >= total_tracks) return;
-    const char *name = strlen(info_title_str) ? info_title_str : playlist[current_track];
-    int name_len = strlen(name);
+    const char *raw_name = strlen(info_title_str) ? info_title_str : playlist[current_track];
+    char clean_name[128];
+    format_clean_song_name(raw_name, clean_name, sizeof(clean_name));
+    int name_len = strlen(clean_name);
     int max_chars = 14;
     int ofs = 0;
     int left_pad = 0;
@@ -532,7 +580,7 @@ static void draw_player_title(void)
         if (left_pad < 0) left_pad = 0;
     }
     char display[32];
-    snprintf(display, sizeof(display), "%.*s", max_chars, name + ofs);
+    snprintf(display, sizeof(display), "%.*s", max_chars, clean_name + ofs);
     
     rg_gui_set_font_size(16);
     rg_gui_draw_text_line(0, 16, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, left_pad);
@@ -593,10 +641,15 @@ static void draw_player_top_area(bool full_redraw)
     }
     rg_gui_draw_rect(0, 0, SCREEN_W, 14, MUSIC_BG);
     rg_gui_set_font_size(8);
+    rg_gui_set_text_color(RG_COLOR_WHITE);
+    rg_gui_set_fill_color(MUSIC_BG);
+    rg_gui_draw_text_center(SCREEN_W / 2, 4, "NOW PLAYING");
     if (is_shuffle) {
-        rg_gui_draw_text_center(SCREEN_W / 2, 4, "SHUFFLE ON");
-    } else {
-        rg_gui_draw_text_center(SCREEN_W / 2, 4, "NOW PLAYING");
+        rg_gui_draw_rect(210, 1, 18, 12, RG_COLOR_RGB(180, 100, 255));
+        rg_gui_set_font_size(8);
+        rg_gui_set_text_color(RG_COLOR_BLACK);
+        rg_gui_set_fill_color(RG_COLOR_RGB(180, 100, 255));
+        rg_gui_draw_text_center(210 + 9, 1 + 2, "S");
     }
     draw_player_title();
     draw_player_metadata();
@@ -1320,6 +1373,7 @@ static void pause_current_track(void)
     audio_pipeline_stop(pipeline);
     audio_pipeline_wait_for_stop(pipeline);
     is_playing = false;
+    player_dirty = true;
     ESP_LOGI(TAG, "Paused track at byte_pos = %lld", (long long)saved_byte_pos);
 }
 
@@ -1340,6 +1394,7 @@ static void resume_current_track(void)
 
     audio_pipeline_run(pipeline);
     is_playing = true;
+    player_dirty = true;
     ESP_LOGI(TAG, "Resumed track from byte_pos = %lld", (long long)saved_byte_pos);
 }
 
@@ -1378,19 +1433,13 @@ void app_music_handle_input(button_event_t event)
                 vol_bar_timer = esp_timer_get_time() / 1000;
                 draw_volume_bar();
             } else if (total_tracks > 0) {
-                int old_vs = view_start;
                 prev_selected = selected_index;
-                selected_index = (selected_index - 1 + total_tracks) % total_tracks;
+                selected_index = (selected_index - 1 + total_tracks) % total_tracks; // Button up moves list down
                 ensure_cursor_visible();
                 scroll_char_offset = 0;
                 scroll_timer = esp_timer_get_time() / 1000;
-                if (view_start != old_vs) {
-                    list_full_dirty = true;
-                } else {
-                    int os = prev_selected - view_start;
-                    int ns = selected_index - view_start;
-                    if (os >= 0 && os < VISIBLE_ITEMS) slot_dirty[os] = true;
-                    if (ns >= 0 && ns < VISIBLE_ITEMS) slot_dirty[ns] = true;
+                for (int i = 0; i < VISIBLE_ITEMS; i++) {
+                    slot_dirty[i] = true;
                 }
             }
             break;
@@ -1404,19 +1453,13 @@ void app_music_handle_input(button_event_t event)
                 vol_bar_timer = esp_timer_get_time() / 1000;
                 draw_volume_bar();
             } else if (total_tracks > 0) {
-                int old_vs2 = view_start;
                 prev_selected = selected_index;
-                selected_index = (selected_index + 1) % total_tracks;
+                selected_index = (selected_index + 1) % total_tracks; // Button down moves list up
                 ensure_cursor_visible();
                 scroll_char_offset = 0;
                 scroll_timer = esp_timer_get_time() / 1000;
-                if (view_start != old_vs2) {
-                    list_full_dirty = true;
-                } else {
-                    int os2 = prev_selected - view_start;
-                    int ns2 = selected_index - view_start;
-                    if (os2 >= 0 && os2 < VISIBLE_ITEMS) slot_dirty[os2] = true;
-                    if (ns2 >= 0 && ns2 < VISIBLE_ITEMS) slot_dirty[ns2] = true;
+                for (int i = 0; i < VISIBLE_ITEMS; i++) {
+                    slot_dirty[i] = true;
                 }
             }
             break;
@@ -1634,8 +1677,10 @@ void app_music_tick(void)
             draw_player_timer();
         }
         if (current_track < total_tracks) {
-            const char *name = strlen(info_title_str) ? info_title_str : playlist[current_track];
-            int name_len = strlen(name);
+            const char *raw_name = strlen(info_title_str) ? info_title_str : playlist[current_track];
+            char clean_name[128];
+            format_clean_song_name(raw_name, clean_name, sizeof(clean_name));
+            int name_len = strlen(clean_name);
             if (name_len > 14) {
                 if (now_ms - player_scroll_timer >= 150) {
                     player_scroll_timer = now_ms;
@@ -1661,7 +1706,9 @@ void app_music_tick(void)
     // 2b. Mini player track name scrolling
     if (pipeline_has_run && current_track < total_tracks) {
         const char *mname = strlen(info_title_str) ? info_title_str : playlist[current_track];
-        int mlen = strlen(mname);
+        char clean_name[128];
+        format_clean_song_name(mname, clean_name, sizeof(clean_name));
+        int mlen = strlen(clean_name);
         if (mlen > MINI_MAX_NAME_CHARS) {
             int64_t mnow = esp_timer_get_time() / 1000;
             if (mnow - mini_scroll_timer >= MINI_SCROLL_INTERVAL_MS) {
@@ -1680,6 +1727,7 @@ void app_music_tick(void)
 
     // 3. Redraw list if dirty
     if (list_full_dirty) {
+        draw_music_header();
         draw_song_list();
         list_full_dirty = false;
         scroll_only_dirty = false;
@@ -1712,28 +1760,21 @@ void app_music_tick(void)
         // Only redraw the track name line for scroll updates
         if (pipeline_has_run && current_track < total_tracks) {
             const char *sname = strlen(info_title_str) ? info_title_str : playlist[current_track];
-            int slen = strlen(sname);
+            char clean_name[128];
+            format_clean_song_name(sname, clean_name, sizeof(clean_name));
+            int slen = strlen(clean_name);
             int ofs = mini_scroll_char_offset;
             int max_ofs = slen - MINI_MAX_NAME_CHARS;
             if (max_ofs < 0) max_ofs = 0;
             if (ofs > max_ofs) ofs = max_ofs;
-            char display[64];
-            const char *icon = is_playing ? "> " : "= ";
-            snprintf(display, sizeof(display), "%s%s", icon, sname + ofs);
+            char display[80];
+            const char *icon = is_playing ? "> " : "|| ";
+            snprintf(display, sizeof(display), "%s%s", icon, clean_name + ofs);
             rg_gui_set_font_size(8);
-            rg_gui_draw_text_line(0, MINI_TRACK_Y, SCREEN_W, MINI_TRACK_H,
-                                  MUSIC_BG, RG_COLOR_WHITE, display, 8);
+            rg_gui_draw_text_line(MINI_TRACK_X, MINI_TRACK_Y, MINI_TRACK_W, MINI_TRACK_H,
+                                  MINI_BOX_BG, RG_COLOR_WHITE, display, 8);
         }
         mini_player_scroll_dirty = false;
-    }
-
-    // 5. Update progress bar periodically when playing
-    if (is_playing) {
-        int64_t now = esp_timer_get_time() / 1000;
-        if (now - progress_timer >= 500) {
-            draw_progress_bar();
-            progress_timer = now;
-        }
     }
 }
 
