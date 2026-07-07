@@ -147,7 +147,7 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 
 ## Software Architecture (Current Focus)
 - **Home Menu (`rg_gui`):** The primary home screen is built natively using `rg_gui` (avoiding the overhead of LVGL). It features a grid/list layout for apps.
-- **Game Sub-Menu:** A dedicated "Game App" launcher from the home menu hosting Retro-OS, Tetris, 2048, and Pong.
+- **Game Sub-Menu:** A dedicated "Game App" launcher from the home menu hosting Retro-Go, Tetris, 2048, and Pong.
 - **`main/app_music.c`**: Audio orchestration, SD card background scanning, ID3 parsing, audio pipeline management, and full UI/visualizer rendering.
 - **`main/app_radio.c`**: Dedicated FM Radio application managing RDA5807/RDA5657 I2C tuning, ES8388 analog input mixer routing, preset station list, and live RSSI/Stereo status display.
 - **`main/app_files.c`**: Files browser, RSVP speed reader, and text viewer application.
@@ -155,12 +155,407 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **`components/retro-go/rg_display.c`**: Core ILI9341 SPI LCD driver rendering the `rg_gui` primitives.
 - **`components/input_manager`**: Handles 74HC165 shift register and KY-040 encoder inputs.
 
+---
+
+## Retro-Go Integration Plan: Hybrid Launcher + Retro-Go Architecture
+
+### Overview
+
+The console is divided into two independent environments that share the same hardware:
+
+1. **Console OS (Factory Partition)** — The primary firmware containing all multimedia and utility applications (Music, Radio, Files, Alarm, native games).
+2. **Retro-Go Gaming Environment (OTA Partition)** — A dedicated retro emulation firmware built from the upstream [ducalex/retro-go](https://github.com/ducalex/retro-go) repository, ported to this hardware.
+
+The Console OS acts as the primary operating system presented to the user after power-on. Retro-Go functions as a separate application firmware that is launched only when the user selects "RETRO-GO" from the Games menu. Switching between the two environments is handled via the ESP-IDF OTA partition API and `esp_restart()` — no custom bootloader modifications are required.
+
+### System Layout
+
+```
+Console OS (Factory)              Retro-Go (OTA_0)
+├── Music Player                  ├── NES (retro-core)
+├── FM Radio                      ├── Game Boy
+├── File Browser / RSVP Reader    ├── Game Boy Color
+├── Alarm Clock                   ├── Sega Master System / Game Gear
+└── Games                         ├── PC Engine
+    ├── RETRO-GO ──[reboot]──────>├── DOOM
+    ├── Tetris                    ├── Save States & Cover Art
+    ├── 2048                      └── Exit ──[reboot]──> Console OS
+    └── Pong
+```
+
+### Boot Flow
+
+```
+Power On
+    │
+    ▼
+ESP32 Bootloader
+    │
+    ▼
+Console OS (factory)
+    │
+    ├── Music / Radio / Files / Alarm
+    └── Games
+           │
+           └── User selects RETRO-GO
+                   │
+                   ├── Stop audio pipeline & display DMA
+                   ├── Set OTA_0 partition as boot target
+                   └── esp_restart()
+                           │
+                           ▼
+                   ESP32 Bootloader
+                           │
+                           ▼
+                   Retro-Go (ota_0)
+                           │
+                           ├── Retro-Go Launcher (ROM browser)
+                           ├── Play NES / GB / GBC / SMS / DOOM
+                           └── User exits Retro-Go
+                                   │
+                                   ├── Set factory partition as boot target
+                                   └── esp_restart()
+                                           │
+                                           ▼
+                                   Console OS (factory)
+```
+
+### Flash Partition Table (16 MB)
+
+The ESP32-S3 N16R8 has 16 MB of flash. The partition table allocates space for both firmware images and shared storage:
+
+```csv
+# Name,      Type, SubType,  Offset,    Size,     Flags
+nvs,         data, nvs,      0x9000,    0x6000,
+otadata,     data, ota,      0xF000,    0x2000,
+phy_init,    data, phy,      0x11000,   0x1000,
+factory,     app,  factory,  0x20000,   0x300000,   # Console OS (~3 MB)
+ota_0,       app,  ota_0,    0x320000,  0x400000,   # Retro-Go   (~4 MB)
+storage,     data, fat,      0x720000,  0x8E0000,   # FATFS      (~8.9 MB)
+```
+
+**Notes:**
+- `factory` is the default boot partition (Console OS). The system always boots here unless explicitly switched.
+- `ota_0` holds the Retro-Go firmware. All emulator cores (NES, GB, GBC, SMS, GG, PCE, DOOM) coexist within this single binary via `retro-core`.
+- `otadata` is required by `esp_ota_ops.h` to track which partition to boot.
+- `storage` provides local FATFS for Retro-Go save states, bookmarks, and Console OS data. ROMs, cover art, BIOS files, and music are stored on the SD card.
+- The SD card is mounted at `/sdcard` (Console OS) and `/sd` (Retro-Go's `RG_STORAGE_ROOT`).
+
+### Side A: Console OS Launch Bridge (`main/ui.c`)
+
+When the user selects RETRO-GO from the Games menu (`selected_game == 3`), the Console OS performs a clean handoff:
+
+```c
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "esp_system.h"
+
+static void launch_retro_go(void)
+{
+    ESP_LOGI("RETRO_BRIDGE", "Launching Retro-Go...");
+
+    // 1. Stop active audio pipeline (if music was playing)
+    //    app_music_stop() / app_radio_stop() as needed
+
+    // 2. Drain display DMA and show transition message
+    rg_display_drain();
+    rg_gui_clear(0x0000);
+    rg_gui_draw_text_box(0, 140, 240, 40, 0x0000, "LOADING RETRO-GO...");
+    rg_display_drain();
+
+    // 3. Find the Retro-Go partition (ota_0)
+    const esp_partition_t *retro_part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL
+    );
+
+    if (retro_part) {
+        esp_ota_set_boot_partition(retro_part);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_restart();
+    } else {
+        ESP_LOGE("RETRO_BRIDGE", "Retro-Go partition not found!");
+        // Show error on screen and return to Games menu
+    }
+}
+```
+
+### Side B: Retro-Go Return Bridge
+
+In the Retro-Go firmware, modify `rg_system_switch_app()` in `components/retro-go/rg_system.c` so that exiting to "launcher" boots back to the Console OS instead of searching for a Retro-Go launcher partition:
+
+```c
+void rg_system_switch_app(const char *app, const char *arg1, ...)
+{
+    if (app == NULL || strcmp(app, "launcher") == 0)
+    {
+        // Return to Console OS (factory partition)
+        const esp_partition_t *factory = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL
+        );
+        if (factory) {
+            esp_ota_set_boot_partition(factory);
+            esp_restart();
+        }
+    }
+    // ... rest of existing Retro-Go app switching logic
+}
+```
+
+---
+
+### Retro-Go Custom Target: Hardware Port
+
+A new Retro-Go target must be created to map the console's specific hardware. This target resides inside the cloned `ducalex/retro-go` repository at `components/retro-go/targets/retro-console-s3/`.
+
+#### Target Registration (`components/retro-go/config.h`)
+
+Add the new target to the conditional include chain:
+
+```c
+#elif defined(RG_TARGET_RETRO_CONSOLE_S3)
+#include "targets/retro-console-s3/config.h"
+```
+
+#### Target Config (`targets/retro-console-s3/config.h`)
+
+```c
+// Target definition
+#define RG_TARGET_NAME             "RETRO-CONSOLE-S3"
+
+// --- Storage: SD Card via SDMMC 4-bit ---
+#define RG_STORAGE_ROOT             "/sd"
+#define RG_STORAGE_SDMMC_HOST       SDMMC_HOST_SLOT_1
+#define RG_STORAGE_SDMMC_SPEED      SDMMC_FREQ_DEFAULT
+// GPIO Matrix pin assignments (ESP32-S3 supports flexible SDMMC GPIO mapping)
+#define RG_GPIO_SDSPI_CLK           38
+#define RG_GPIO_SDSPI_CMD           39
+#define RG_GPIO_SDSPI_D0            40
+#define RG_GPIO_SDSPI_D1            41
+#define RG_GPIO_SDSPI_D2            42
+#define RG_GPIO_SDSPI_D3            21
+
+// --- Audio: ES8388 External DAC via I2S ---
+#define RG_AUDIO_USE_INT_DAC        0   // No internal DAC (ESP32-S3 has none)
+#define RG_AUDIO_USE_EXT_DAC        1   // Enable external DAC (ES8388)
+#define RG_GPIO_I2S_MCLK            47
+#define RG_GPIO_I2S_BCLK            15
+#define RG_GPIO_I2S_WS              16
+#define RG_GPIO_I2S_DOUT            17  // ESP32-S3 -> ES8388 (corrected for HW swap)
+#define RG_GPIO_I2S_DIN             18  // ES8388 -> ESP32-S3 (corrected for HW swap)
+// ES8388 I2C control
+#define RG_GPIO_I2C_SDA             4
+#define RG_GPIO_I2C_SCL             5
+#define RG_ES8388_I2C_ADDR          0x20  // 8-bit address (CE=LOW)
+
+// --- Video: ILI9341 240x320 SPI TFT (Portrait) ---
+#define RG_SCREEN_DRIVER            0   // 0 = ILI9341/ST7789
+#define RG_SCREEN_HOST              SPI2_HOST
+#define RG_SCREEN_SPEED             SPI_MASTER_FREQ_16M  // 16 MHz (verified stable)
+#define RG_SCREEN_BACKLIGHT         0   // Hardwired to 3.3V (always on)
+#define RG_SCREEN_WIDTH             240
+#define RG_SCREEN_HEIGHT            320
+#define RG_SCREEN_ROTATE            0   // Portrait native
+#define RG_SCREEN_VISIBLE_AREA      {0, 0, 0, 0}
+#define RG_SCREEN_SAFE_AREA         {0, 0, 0, 0}
+#define RG_GPIO_LCD_MOSI            13
+#define RG_GPIO_LCD_CLK             12
+#define RG_GPIO_LCD_CS              10
+#define RG_GPIO_LCD_DC              9
+#define RG_GPIO_LCD_RST             14
+#define RG_GPIO_LCD_BCKL            -1  // No GPIO control (hardwired)
+// ILI9341 init sequence matching Console OS Profile 2 calibration
+#define RG_SCREEN_INIT()                                              \
+    ILI9341_CMD(0xCF, 0x00, 0xC3, 0x30);                             \
+    ILI9341_CMD(0xED, 0x64, 0x03, 0x12, 0x81);                       \
+    ILI9341_CMD(0xE8, 0x85, 0x00, 0x78);                             \
+    ILI9341_CMD(0xCB, 0x39, 0x2C, 0x00, 0x34, 0x02);                 \
+    ILI9341_CMD(0xF7, 0x20);                                         \
+    ILI9341_CMD(0xEA, 0x00, 0x00);                                   \
+    ILI9341_CMD(0xC0, 0x26);          /* GVDD 4.95V */                \
+    ILI9341_CMD(0xC1, 0x11);                                         \
+    ILI9341_CMD(0xC5, 0x35, 0x3E);    /* VCOM */                     \
+    ILI9341_CMD(0xC7, 0xBE);          /* VCOM offset */              \
+    ILI9341_CMD(0x36, 0x68);          /* MADCTL: Mode 6 portrait */  \
+    ILI9341_CMD(0x3A, 0x55);          /* 16-bit RGB565 */            \
+    ILI9341_CMD(0xB1, 0x00, 0x1B);                                   \
+    ILI9341_CMD(0xB6, 0x0A, 0xA2);                                   \
+
+// --- Input: 74HC165 Shift Register + KY-040 Encoder ---
+// Buttons are directly read from 74HC165 (GPIO 3/6/7) in a custom input driver.
+// Retro-Go's input system requires mapping physical buttons to RG_KEY_* constants.
+// A custom input driver (drivers/input/shift_register.h) will be created.
+#define RG_GPIO_GAMEPAD_SR_CLK      3   // 74HC165 Clock (CP)
+#define RG_GPIO_GAMEPAD_SR_QH       6   // 74HC165 Serial Data Out (Q7)
+#define RG_GPIO_GAMEPAD_SR_PL       7   // 74HC165 Parallel Load (PL)
+#define RG_GPIO_GAMEPAD_EN_CLK      1   // KY-040 Encoder CLK
+#define RG_GPIO_GAMEPAD_EN_DT       2   // KY-040 Encoder DT
+
+// Button-to-Retro-Go key mapping (active LOW, MSB-first):
+// D7 = BTN_A     -> RG_KEY_A        (Primary action)
+// D6 = BTN_UP    -> RG_KEY_UP       (D-Pad Up)
+// D5 = BTN_DOWN  -> RG_KEY_DOWN     (D-Pad Down)
+// D4 = BTN_LEFT  -> RG_KEY_LEFT     (D-Pad Left)
+// D3 = BTN_B     -> RG_KEY_B        (Secondary action)
+// D2 = BTN_ESC   -> RG_KEY_MENU     (In-game menu / Exit)
+// D1 = BTN_ENTER -> RG_KEY_START    (Start / Select)
+// D0 = BTN_RIGHT -> RG_KEY_RIGHT    (D-Pad Right)
+// KY-040 CW      -> RG_KEY_OPTION   (Volume Up / Settings)
+// KY-040 CCW      -> RG_KEY_SELECT  (Volume Down)
+```
+
+#### Target Environment (`targets/retro-console-s3/env.py`)
+
+```python
+IDF_TARGET = "esp32s3"
+FW_FORMAT = "none"
+```
+
+#### Target sdkconfig (`targets/retro-console-s3/sdkconfig`)
+
+Key sdkconfig overrides for this hardware:
+
+```
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+```
+
+---
+
+### ES8388 Audio Integration in Retro-Go
+
+Retro-Go's audio subsystem outputs raw PCM samples via its `rg_audio_driver_i2s` driver when `RG_AUDIO_USE_EXT_DAC = 1`. The standard I2S external DAC path in Retro-Go sends PCM data over I2S pins (BCLK, WS, DOUT) — the ES8388 receives this data identically to how a PCM5102A or any I2S DAC would.
+
+**What is needed:**
+1. **I2S pin configuration**: Defined via `RG_GPIO_I2S_*` macros in the target `config.h` above. Retro-Go's I2S driver initializes I2S with these pins.
+2. **ES8388 codec initialization**: Unlike a passive I2S DAC (PCM5102A), the ES8388 requires I2C register configuration before it will output audio. A hardware init function must be added to the Retro-Go target to configure the ES8388 at startup:
+   - Set codec to Slave mode, DAC-only (DECODE)
+   - Configure DACCONTROL17/20 = 0x80 (disconnect analog inputs from mixer to prevent noise)
+   - Set ADCPOWER = 0xFF (power down ADC)
+   - Set DAC output to ALL (LOUT1/ROUT1/LOUT2/ROUT2)
+   - MCLK/LRCK ratio = 256
+
+This initialization should be placed in a `rg_board_init()` function called from `rg_system_init()`, or as a custom audio driver init hook.
+
+### SDMMC 4-Bit SD Card in Retro-Go
+
+The upstream `rg_storage.c` already supports SDMMC mode when `RG_STORAGE_SDMMC_HOST` is defined. On ESP32-S3 (`SOC_SDMMC_USE_GPIO_MATRIX` is true), the GPIO matrix allows flexible pin assignment.
+
+**Modification required in `rg_storage.c`**: The upstream code defaults to 1-bit SDMMC (`slot_config.width = 1`). For 4-bit mode, the following changes are needed:
+
+```c
+#elif defined(RG_STORAGE_SDMMC_HOST)
+    sdmmc_host_t host_config = SDMMC_HOST_DEFAULT();
+    host_config.flags = SDMMC_HOST_FLAG_4BIT;     // Changed from FLAG_1BIT
+    host_config.slot = RG_STORAGE_SDMMC_HOST;
+    host_config.max_freq_khz = RG_STORAGE_SDMMC_SPEED;
+
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot_config.width = 4;                         // Changed from 1
+#if SOC_SDMMC_USE_GPIO_MATRIX
+    slot_config.clk  = RG_GPIO_SDSPI_CLK;         // GPIO 38
+    slot_config.cmd  = RG_GPIO_SDSPI_CMD;          // GPIO 39
+    slot_config.d0   = RG_GPIO_SDSPI_D0;           // GPIO 40
+    slot_config.d1   = RG_GPIO_SDSPI_D1;           // GPIO 41
+    slot_config.d2   = RG_GPIO_SDSPI_D2;           // GPIO 42
+    slot_config.d3   = RG_GPIO_SDSPI_D3;           // GPIO 21
+#endif
+```
+
+### Custom Input Driver (74HC165 Shift Register)
+
+Retro-Go's input system expects a `rg_input_read_gamepad()` function returning a bitmask of `RG_KEY_*` constants. A custom input driver must be created at `components/retro-go/drivers/input/shift_register.h` that:
+
+1. Reads the 74HC165 shift register via GPIO 3 (CLK), 6 (QH), 7 (PL) — same protocol as the Console OS `input_manager`.
+2. Reads the KY-040 rotary encoder via GPIO 1 (CLK), 2 (DT) for volume control.
+3. Maps the 8-bit shift register output + encoder rotation to `RG_KEY_UP`, `RG_KEY_DOWN`, `RG_KEY_LEFT`, `RG_KEY_RIGHT`, `RG_KEY_A`, `RG_KEY_B`, `RG_KEY_MENU`, `RG_KEY_START`, `RG_KEY_OPTION`, `RG_KEY_SELECT`.
+
+---
+
+### SD Card File Layout
+
+Both firmware environments share the same SD card. ROMs, cover art, BIOS files, save states, music, and text files all coexist:
+
+```
+/sdcard (or /sd in Retro-Go)
+├── roms/
+│   ├── nes/          # .nes ROM files
+│   ├── gb/           # .gb ROM files
+│   ├── gbc/          # .gbc ROM files
+│   ├── sms/          # .sms ROM files
+│   ├── gg/           # .gg ROM files
+│   ├── pce/          # .pce ROM files
+│   └── doom/         # .wad files
+├── romart/           # Retro-Go cover art PNGs (160x168)
+│   ├── nes/
+│   ├── gb/
+│   └── ...
+├── retro-go/
+│   ├── config/       # Retro-Go configuration JSONs
+│   ├── saves/        # Save states
+│   └── bios/         # GB/GBC/FDS BIOS files
+├── music/            # MP3/FLAC/AAC/WAV/M4A files (Console OS)
+└── books/            # .txt files (Console OS Files app)
+```
+
+### Implementation Phases
+
+#### Phase 1: Partition Table & OTA Infrastructure
+- Create `partitions.csv` with factory + ota_0 + storage layout.
+- Update Console OS `sdkconfig` to `CONFIG_PARTITION_TABLE_CUSTOM=y`.
+- Add `esp_ota_ops.h` calls to `ui.c` for the RETRO-GO launch bridge.
+- Verify `esp_restart()` correctly reboots between factory and ota_0 using a minimal test binary.
+
+#### Phase 2: Retro-Go Repository Clone & Target Creation
+- Clone `ducalex/retro-go` (branch `master`) into a sibling directory.
+- Create `components/retro-go/targets/retro-console-s3/` with `config.h`, `env.py`, and `sdkconfig`.
+- Register the target in `components/retro-go/config.h`.
+- Build using `python rg_tool.py --target=retro-console-s3 build-img`.
+
+#### Phase 3: Display Driver Verification
+- Confirm ILI9341 init sequence produces correct colors and orientation in portrait mode.
+- Match the Console OS Profile 2 contrast calibration (GVDD, VCOM, gamma curves).
+- Verify `RG_SCREEN_WIDTH=240`, `RG_SCREEN_HEIGHT=320` renders correctly in Retro-Go's scaling pipeline.
+
+#### Phase 4: SD Card SDMMC 4-Bit Integration
+- Modify `rg_storage.c` SDMMC path for 4-bit mode with GPIO matrix pins (38/39/40/41/42/21).
+- Verify ROM loading, save state writing, and cover art reading from `/sd/roms/`, `/sd/retro-go/saves/`, and `/sd/romart/`.
+
+#### Phase 5: ES8388 Audio Driver
+- Implement ES8388 I2C initialization (codec mode, mixer disconnect, ADC power down) in Retro-Go's board init.
+- Configure I2S pins (MCLK=47, BCLK=15, WS=16, DOUT=17) in the external DAC I2S driver.
+- Verify emulator audio output through the ES8388 DAC to speakers/headphones.
+
+#### Phase 6: 74HC165 Input Driver
+- Create `drivers/input/shift_register.h` implementing `rg_input_read_gamepad()`.
+- Map 74HC165 bits (GPIO 3/6/7) and KY-040 encoder (GPIO 1/2) to Retro-Go key constants.
+- Verify D-Pad, A/B, Menu, Start navigation works in the Retro-Go launcher and in-game.
+
+#### Phase 7: Return Bridge & Polish
+- Modify `rg_system_switch_app("launcher")` to set factory partition and reboot.
+- Test full round-trip: Console OS → RETRO-GO → play a game → exit → Console OS.
+- Verify Console OS state restoration (home screen redraws cleanly after reboot).
+
+### Advantages
+
+- **Clean separation**: Multimedia applications and emulation firmware are completely independent.
+- **Only two firmware images** to maintain (Console OS + Retro-Go).
+- **Retro-Go remains largely unchanged** from upstream, simplifying future updates.
+- **No duplication** of ROM browsers, save-state systems, or emulator management code.
+- **Native games** (Tetris, 2048, Pong) continue to run directly inside the Console OS without rebooting.
+- **Full Retro-Go feature set**: ROM browser, favorites, recently played, save states, cover art, scaling/filters, turbo/fast forward, in-game menu — all available without reimplementation.
+
 ## Reference Documentation (MCP Servers)
-- `retro-go Docs`: Core OS architecture, game sessions, emulator framework.
+- `retro-go Docs`: Core OS architecture, game sessions, emulator framework, porting guide.
 - `s3-node-repo Docs`: LVGL-based OS with radial app menu, DOOM integration, display/input patterns.
 - `esp-adf Docs`: Audio pipeline management, ES8388 driver, codec HAL integration.
 
 ## Environment Paths
 - **ADF:** `C:\Users\Dell\esp\esp-adf`
 - **IDF:** `C:\Users\Dell\esp\v5.3.4\esp-idf`
+- **Retro-Go (to be cloned):** `C:\Users\Dell\esp\projects\retro-go`
 
