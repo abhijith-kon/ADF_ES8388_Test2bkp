@@ -18,6 +18,7 @@
 #include "app_music.h"
 #include "app_files.h"
 #include "app_alarm.h"
+#include "app_radio.h"
 #include "ui.h" // Retro-OS games launcher
 
 static const char *TAG = "MAIN";
@@ -27,7 +28,8 @@ typedef enum {
     APP_FILES,
     APP_MUSIC,
     APP_ALARM,
-    APP_GAMES
+    APP_GAMES,
+    APP_RADIO
 } app_state_t;
 
 static app_state_t current_app = APP_HOME;
@@ -219,6 +221,10 @@ void app_main(void)
                     current_app = APP_MUSIC;
                     app_music_start();
                 } 
+                else if (selected == 2) { // APP_RADIO
+                    current_app = APP_RADIO;
+                    app_radio_start();
+                }
                 else if (selected == 6) { // APP_ALARM
                     current_app = APP_ALARM;
                     app_alarm_start();
@@ -274,6 +280,17 @@ void app_main(void)
                 ui_handle_input(event);
             }
         }
+        else if (current_app == APP_RADIO) {
+            if (event == BTN_ESCAPE) {
+                app_radio_stop();
+                current_app = APP_HOME;
+                rg_display_drain();
+                rg_gui_clear(0x0000);
+                home_ui_force_redraw();
+            } else {
+                app_radio_handle_input(event);
+            }
+        }
 
         // --- RENDER LOOP & TICK ---
         if (current_app == APP_HOME) {
@@ -292,6 +309,9 @@ void app_main(void)
         }
         else if (current_app == APP_GAMES) {
             ui_update();
+        }
+        else if (current_app == APP_RADIO) {
+            app_radio_tick();
         }
 
         app_alarm_tick(); // Check and ring alarm across all apps

@@ -156,6 +156,7 @@ void rg_display_init(void)
         for (int y = 0; y < LCD_V_RES; y++) {
             esp_lcd_panel_draw_bitmap(panel_handle, 0, y, LCD_H_RES, y + 1, buf);
         }
+        rg_display_drain();
         free(buf);
         ESP_LOGI(TAG, "Display cleared (240x320 portrait, 16MHz SPI).");
     }
@@ -163,9 +164,12 @@ void rg_display_init(void)
 
 void rg_display_write(int x, int y, int width, int height, int stride, const void *buffer)
 {
-    if (panel_handle) {
-        esp_lcd_panel_draw_bitmap(panel_handle, x, y, x + width, y + height, buffer);
+    if (!panel_handle || width <= 0 || height <= 0) return;
+    if (x < 0 || y < 0 || x + width > LCD_H_RES || y + height > LCD_V_RES) {
+        ESP_LOGW(TAG, "rg_display_write out of bounds ignored: x=%d, y=%d, w=%d, h=%d", x, y, width, height);
+        return;
     }
+    esp_lcd_panel_draw_bitmap(panel_handle, x, y, x + width, y + height, buffer);
 }
 
 void rg_display_drain(void)

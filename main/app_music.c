@@ -350,7 +350,7 @@ static void draw_rounded_box(int x, int y, int w, int h, int r, uint16_t fill_co
     int needed = w * h * (int)sizeof(uint16_t);
     if (needed > box_buf_cap) {
         if (box_buf) free(box_buf);
-        box_buf = heap_caps_malloc(needed, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        box_buf = heap_caps_malloc(needed, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!box_buf) box_buf = heap_caps_malloc(needed, MALLOC_CAP_DMA);
         if (!box_buf) box_buf = malloc(needed);
         box_buf_cap = needed;
@@ -820,7 +820,7 @@ static void draw_player_thumbnail(void)
                         sess.out_h = 0;
 
                         JDEC jd;
-                        char *pool = heap_caps_malloc(4096, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+                        char *pool = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                         if (!pool) pool = malloc(4096);
                         if (pool) {
                             JRESULT res_prep = jd_prepare(&jd, tjpg_in_func, pool, 4096, &sess);

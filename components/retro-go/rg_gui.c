@@ -9,7 +9,7 @@ static const char *TAG = "rg_gui";
 
 static void *rg_gui_dma_malloc(size_t size)
 {
-    void *ptr = heap_caps_malloc(size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!ptr) ptr = heap_caps_malloc(size, MALLOC_CAP_DMA);
     if (!ptr) ptr = malloc(size);
     return ptr;
@@ -17,13 +17,24 @@ static void *rg_gui_dma_malloc(size_t size)
 
 static void rg_gui_send_dma_chunked(int x, int y, int w, int h, const uint16_t *buf)
 {
+    if (w <= 0 || h <= 0 || !buf) return;
+    int clip_x = x, clip_y = y, clip_w = w, clip_h = h;
+    int src_ox = 0, src_oy = 0;
+    if (clip_x < 0) { src_ox = -clip_x; clip_w += clip_x; clip_x = 0; }
+    if (clip_y < 0) { src_oy = -clip_y; clip_h += clip_y; clip_y = 0; }
+    if (clip_x + clip_w > 240) clip_w = 240 - clip_x;
+    if (clip_y + clip_h > 320) clip_h = 320 - clip_y;
+    if (clip_w <= 0 || clip_h <= 0) return;
+
     static uint16_t dma_chunk[240 * 20] __attribute__((aligned(4)));
     int lines_per_chunk = 20;
-    for (int cy = 0; cy < h; cy += lines_per_chunk) {
-        int lines = (cy + lines_per_chunk <= h) ? lines_per_chunk : (h - cy);
-        ESP_LOGI(TAG, "chunk y=%d lines=%d", cy, lines);
-        memcpy(dma_chunk, &buf[cy * w], lines * w * sizeof(uint16_t));
-        rg_display_write(x, y + cy, w, lines, w * 2, dma_chunk);
+    for (int cy = 0; cy < clip_h; cy += lines_per_chunk) {
+        int lines = (cy + lines_per_chunk <= clip_h) ? lines_per_chunk : (clip_h - cy);
+        for (int l = 0; l < lines; l++) {
+            const uint16_t *src_row = &buf[(src_oy + cy + l) * w + src_ox];
+            memcpy(&dma_chunk[l * clip_w], src_row, clip_w * sizeof(uint16_t));
+        }
+        rg_display_write(clip_x, clip_y + cy, clip_w, lines, clip_w * 2, dma_chunk);
         rg_display_drain();
     }
 }
@@ -154,14 +165,18 @@ void rg_gui_draw_text(int x, int y, const char *text, uint16_t color, uint16_t b
                 char_buf[row * 8 + col] = (bits & (1 << (7 - col))) ? color_sw : bg_sw;
             }
         }
-        rg_display_write(x + i * 8, y, 8, 8, 8 * 2, char_buf);
-        rg_display_drain();
+        rg_gui_send_dma_chunked(x + i * 8, y, 8, 8, char_buf);
     }
 }
 
 void rg_gui_draw_rect(int x, int y, int w, int h, uint16_t color)
 {
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > 240) w = 240 - x;
+    if (y + h > 320) h = 320 - y;
     if (w <= 0 || h <= 0) return;
+
     // Pre-allocated static buffer — never freed, prevents DMA corruption on realloc.
     // Max 2048 uint16_t = 4096 bytes, sufficient for any width (max_lines = 4096/(w*2)).
     static uint16_t rect_buf[2048] __attribute__((aligned(4)));
@@ -171,8 +186,6 @@ void rg_gui_draw_rect(int x, int y, int w, int h, uint16_t color)
     int max_lines = max_pixels / w;
     if (max_lines == 0) max_lines = 1;
     if (max_lines > h) max_lines = h;
-
-    ESP_LOGI(TAG, "rect w=%d h=%d max_lines=%d", w, h, max_lines);
 
     // Byte-swap for ILI9341 big-endian RGB565 (ESP32 is little-endian)
     uint16_t color_sw = ((color >> 8) | (color << 8));
@@ -280,9 +293,12 @@ void rg_gui_draw_text_box(int box_x, int box_y, int box_w, int box_h,
     int text_w = len * char_w;
     int text_h = char_w;
 
-    // Clamp box to at least text size
-    if (box_w < text_w) box_w = text_w;
-    if (box_h < text_h) box_h = text_h;
+    // Clamp box dimensions to screen limits
+    if (box_x < 0) { box_w += box_x; box_x = 0; }
+    if (box_y < 0) { box_h += box_y; box_y = 0; }
+    if (box_x + box_w > 240) box_w = 240 - box_x;
+    if (box_y + box_h > 320) box_h = 320 - box_y;
+    if (box_w <= 0 || box_h <= 0) return;
 
     // Quad-buffered pool to prevent DMA conflicts across rapid calls
     static uint16_t *tb_bufs[4] = {NULL, NULL, NULL, NULL};
@@ -345,6 +361,11 @@ void rg_gui_draw_text_line(int box_x, int box_y, int box_w, int box_h,
     int char_w = 8 * current_font_scale;
     int text_h = char_w;
     if (box_h < text_h) box_h = text_h;
+    if (box_x < 0) { box_w += box_x; box_x = 0; }
+    if (box_y < 0) { box_h += box_y; box_y = 0; }
+    if (box_x + box_w > 240) box_w = 240 - box_x;
+    if (box_y + box_h > 320) box_h = 320 - box_y;
+    if (box_w <= 0 || box_h <= 0) return;
 
     static uint16_t *tl_bufs[4] = {NULL, NULL, NULL, NULL};
     static int tl_sizes[4] = {0, 0, 0, 0};
