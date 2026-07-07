@@ -32,6 +32,23 @@ static esp_lcd_panel_handle_t panel_handle = NULL;
 #define LCD_LAND_W  320
 #define LCD_LAND_H  240
 
+/* Diagnostic contrast & gamma profiles for ILI9341-compatible panels:
+ * 0 = Default ESP-IDF vendor init (washed out on some new clones)
+ * 1 = Standard Adafruit / ILI9341 specification gamma (tested in Step 2: still low contrast)
+ * 2 = High-Contrast Clone profile: Adjusted GVDD (0xC0), VCOM (0xC5/0xC7), and IPS/Clone E0/E1 gamma
+ * 3 = Ultra-High Contrast profile: GVDD=0x28, VCOM={0x3E,0x28}, linear E0/E1 gamma
+ */
+#define CONFIG_ILI9341_CONTRAST_PROFILE  2
+
+/* Display Orientation / Mirroring configuration (with swap_xy=true):
+ * Mode 4: mirror_x=false, mirror_y=false (horizontally mirrored on some panels)
+ * Mode 5: mirror_x=true,  mirror_y=false
+ * Mode 6: mirror_x=false, mirror_y=true (un-mirrors horizontal axis when MY controls left/right scan)
+ * Mode 7: mirror_x=true,  mirror_y=true
+ */
+#define CONFIG_ILI9341_MIRROR_X  false
+#define CONFIG_ILI9341_MIRROR_Y  true
+
 void rg_display_init(void)
 {
     ESP_LOGI(TAG, "Initializing GoldenMorning 2.8\" ILI9341...");
@@ -71,7 +88,7 @@ void rg_display_init(void)
     ESP_LOGI(TAG, "Installing ILI9341 panel driver...");
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = -1,   // Already reset manually above
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
     };
     ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(io_handle, &panel_config, &panel_handle));
@@ -82,15 +99,55 @@ void rg_display_init(void)
     esp_lcd_panel_init(panel_handle);       // Full ILI9341 init (sleep out, power, gamma, etc.)
     vTaskDelay(pdMS_TO_TICKS(100));
 
+#if CONFIG_ILI9341_CONTRAST_PROFILE == 1
+    /* Profile 1: Standard Adafruit / ILI9341 specification gamma */
+    esp_lcd_panel_io_tx_param(io_handle, 0x26, (uint8_t[]){0x01}, 1);
+    const uint8_t pos_gamma[] = {0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0xF1, 0x37, 0x07, 0x10, 0x03, 0x0E, 0x09, 0x00};
+    const uint8_t neg_gamma[] = {0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F};
+    esp_lcd_panel_io_tx_param(io_handle, 0xE0, pos_gamma, sizeof(pos_gamma));
+    esp_lcd_panel_io_tx_param(io_handle, 0xE1, neg_gamma, sizeof(neg_gamma));
+#elif CONFIG_ILI9341_CONTRAST_PROFILE == 2
+    /* Profile 2: High-Contrast Clone Profile (GoldenMorning / GC9306 / ILI9341V compatibility)
+     * Raises GVDD and calibrates VCOM common voltages to eliminate milky gray blacks. */
+    esp_lcd_panel_io_tx_param(io_handle, 0xC0, (uint8_t[]){0x26}, 1);               // Power Control 1: GVDD = 4.95V
+    esp_lcd_panel_io_tx_param(io_handle, 0xC1, (uint8_t[]){0x11}, 1);               // Power Control 2
+    esp_lcd_panel_io_tx_param(io_handle, 0xC5, (uint8_t[]){0x35, 0x3E}, 2);         // VCOM Control 1: VCOMH/VCOML
+    esp_lcd_panel_io_tx_param(io_handle, 0xC7, (uint8_t[]){0xBE}, 1);               // VCOM Control 2
+    esp_lcd_panel_io_tx_param(io_handle, 0x26, (uint8_t[]){0x01}, 1);               // Gamma Curve 1
+    const uint8_t pos_gamma[] = {0x00, 0x03, 0x09, 0x08, 0x16, 0x0A, 0x3F, 0x78, 0x4C, 0x09, 0x0A, 0x08, 0x16, 0x1A, 0x0F};
+    const uint8_t neg_gamma[] = {0x00, 0x16, 0x19, 0x03, 0x0F, 0x05, 0x32, 0x45, 0x46, 0x04, 0x0E, 0x0D, 0x35, 0x37, 0x0F};
+    esp_lcd_panel_io_tx_param(io_handle, 0xE0, pos_gamma, sizeof(pos_gamma));
+    esp_lcd_panel_io_tx_param(io_handle, 0xE1, neg_gamma, sizeof(neg_gamma));
+#elif CONFIG_ILI9341_CONTRAST_PROFILE == 3
+    /* Profile 3: Ultra-High Contrast Profile (Max GVDD + Adafruit VCOM + Standard E0/E1) */
+    esp_lcd_panel_io_tx_param(io_handle, 0xC0, (uint8_t[]){0x28}, 1);               // Power Control 1: GVDD = 5.05V
+    esp_lcd_panel_io_tx_param(io_handle, 0xC1, (uint8_t[]){0x10}, 1);               // Power Control 2
+    esp_lcd_panel_io_tx_param(io_handle, 0xC5, (uint8_t[]){0x3E, 0x28}, 2);         // VCOM Control 1
+    esp_lcd_panel_io_tx_param(io_handle, 0xC7, (uint8_t[]){0x86}, 1);               // VCOM Control 2
+    esp_lcd_panel_io_tx_param(io_handle, 0x26, (uint8_t[]){0x01}, 1);               // Gamma Curve 1
+    const uint8_t pos_gamma[] = {0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0xF1, 0x37, 0x07, 0x10, 0x03, 0x0E, 0x09, 0x00};
+    const uint8_t neg_gamma[] = {0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F};
+    esp_lcd_panel_io_tx_param(io_handle, 0xE0, pos_gamma, sizeof(pos_gamma));
+    esp_lcd_panel_io_tx_param(io_handle, 0xE1, neg_gamma, sizeof(neg_gamma));
+#endif
+
+    /* Explicitly verify Normal Display Mode (0x13) and Display ON (0x29) */
+    esp_lcd_panel_io_tx_param(io_handle, 0x13, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    esp_lcd_panel_io_tx_param(io_handle, 0x29, NULL, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
     /* ---- Orientation & display on ---- */
     esp_lcd_panel_disp_on_off(panel_handle, true);
     /* Initialize directly in portrait mode (240x320) to match UI layout.
-     * Avoids the landscape→portrait MADCTL transition that can leave
-     * edge pixels in an undefined state (right-edge brightness bug). */
-    esp_lcd_panel_swap_xy(panel_handle, false);
-    esp_lcd_panel_mirror(panel_handle, true, false);    // MX=1 for correct GoldenMorning orientation
+     * Mode 4 configuration (swap_xy=1, MX=0, MY=0) determined experimentally
+     * for the new GoldenMorning/ILI9341-compatible panel revision. */
+    esp_lcd_panel_swap_xy(panel_handle, true);
+    esp_lcd_panel_mirror(panel_handle, CONFIG_ILI9341_MIRROR_X, CONFIG_ILI9341_MIRROR_Y);   // Mode 6 un-mirrors horizontally
     esp_lcd_panel_invert_color(panel_handle, false);    // No inversion for this panel
     esp_lcd_panel_set_gap(panel_handle, 0, 0);          // Explicit zero column/row offset
+    ESP_LOGI(TAG, "Panel init complete: ContrastProfile=%d, MirrorX=%d, MirrorY=%d",
+             CONFIG_ILI9341_CONTRAST_PROFILE, CONFIG_ILI9341_MIRROR_X, CONFIG_ILI9341_MIRROR_Y);
 
     /* ---- Clear screen to black (portrait: 240x320) ---- */
     uint16_t *buf = malloc(LCD_H_RES * 2);
@@ -126,20 +183,20 @@ void rg_display_set_config(rg_display_config_t config)
 
     switch (config.rotation) {
         case RG_SCREEN_ROTATION_0:
-            esp_lcd_panel_swap_xy(panel_handle, false);
-            esp_lcd_panel_mirror(panel_handle, true, false);
+            esp_lcd_panel_swap_xy(panel_handle, true);
+            esp_lcd_panel_mirror(panel_handle, CONFIG_ILI9341_MIRROR_X, CONFIG_ILI9341_MIRROR_Y);
             break;
         case RG_SCREEN_ROTATION_90:
-            esp_lcd_panel_swap_xy(panel_handle, true);
-            esp_lcd_panel_mirror(panel_handle, false, false);
+            esp_lcd_panel_swap_xy(panel_handle, false);
+            esp_lcd_panel_mirror(panel_handle, !CONFIG_ILI9341_MIRROR_X, !CONFIG_ILI9341_MIRROR_Y);
             break;
         case RG_SCREEN_ROTATION_180:
-            esp_lcd_panel_swap_xy(panel_handle, false);
-            esp_lcd_panel_mirror(panel_handle, true, true);
+            esp_lcd_panel_swap_xy(panel_handle, true);
+            esp_lcd_panel_mirror(panel_handle, !CONFIG_ILI9341_MIRROR_X, !CONFIG_ILI9341_MIRROR_Y);
             break;
         case RG_SCREEN_ROTATION_270:
-            esp_lcd_panel_swap_xy(panel_handle, true);
-            esp_lcd_panel_mirror(panel_handle, true, false);
+            esp_lcd_panel_swap_xy(panel_handle, false);
+            esp_lcd_panel_mirror(panel_handle, CONFIG_ILI9341_MIRROR_X, CONFIG_ILI9341_MIRROR_Y);
             break;
     }
 }

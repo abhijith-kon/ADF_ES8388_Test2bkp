@@ -2,10 +2,12 @@
 #define UI_H
 
 #include "input_manager.h"
+#include <stdbool.h>
 
 void ui_init(void);
 void ui_update(void);
 void ui_handle_input(button_event_t event);
+bool ui_is_in_game(void);
 
 #endif
 

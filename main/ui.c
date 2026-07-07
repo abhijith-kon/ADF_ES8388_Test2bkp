@@ -1,6 +1,10 @@
 #include "ui.h"
 #include "rg_gui.h"
 #include "rg_display.h"
+#include "game_tetris.h"
+#include "game_2048.h"
+#include "game_pong.h"
+#include "game_sound.h"
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -22,6 +26,20 @@ static const char *games_list[] = {
 #define NUM_GAMES 4
 
 static int selected_game = 0;
+
+typedef enum {
+    GAME_STATE_MENU = 0,
+    GAME_STATE_TETRIS,
+    GAME_STATE_2048,
+    GAME_STATE_PONG
+} game_state_t;
+
+static game_state_t current_game_state = GAME_STATE_MENU;
+
+bool ui_is_in_game(void)
+{
+    return current_game_state != GAME_STATE_MENU;
+}
 
 // ---- Rounded Box Helper ----
 static void draw_rounded_box(int x, int y, int w, int h, int r, uint16_t fill_color, uint16_t border_color, int border_width)
@@ -133,21 +151,67 @@ void ui_init(void)
 {
     ESP_LOGI(TAG, "Games page opened");
     selected_game = 0;
+    current_game_state = GAME_STATE_MENU;
     draw_games_list();
 }
 
 void ui_update(void)
 {
-    // No-op: games list is static and event-driven.
+    if (current_game_state == GAME_STATE_TETRIS) {
+        game_tetris_tick();
+    } else if (current_game_state == GAME_STATE_2048) {
+        game_2048_tick();
+    } else if (current_game_state == GAME_STATE_PONG) {
+        game_pong_tick();
+    }
 }
 
 void ui_handle_input(button_event_t event)
 {
+    if (current_game_state == GAME_STATE_TETRIS) {
+        if (game_tetris_input(event)) {
+            rg_display_drain();
+            current_game_state = GAME_STATE_MENU;
+            draw_games_list();
+        }
+        return;
+    } else if (current_game_state == GAME_STATE_2048) {
+        if (game_2048_input(event)) {
+            rg_display_drain();
+            current_game_state = GAME_STATE_MENU;
+            draw_games_list();
+        }
+        return;
+    } else if (current_game_state == GAME_STATE_PONG) {
+        if (game_pong_input(event)) {
+            rg_display_drain();
+            current_game_state = GAME_STATE_MENU;
+            draw_games_list();
+        }
+        return;
+    }
+
     if (event == BTN_UP || event == BTN_VOL_DOWN) {
         selected_game = (selected_game - 1 + NUM_GAMES) % NUM_GAMES;
         draw_games_list();
     } else if (event == BTN_DOWN || event == BTN_VOL_UP) {
         selected_game = (selected_game + 1) % NUM_GAMES;
         draw_games_list();
+    } else if (event == BTN_ENTER) {
+        if (selected_game == 0) { // TETRIS
+            rg_display_drain();
+            current_game_state = GAME_STATE_TETRIS;
+            game_tetris_start();
+        } else if (selected_game == 1) { // 2048
+            rg_display_drain();
+            current_game_state = GAME_STATE_2048;
+            game_2048_start();
+        } else if (selected_game == 2) { // PONG
+            rg_display_drain();
+            current_game_state = GAME_STATE_PONG;
+            game_pong_start();
+        } else if (selected_game == 3) { // RETRO-GO
+            // Future launcher
+        }
     }
 }

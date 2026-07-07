@@ -264,7 +264,7 @@ void app_main(void)
             }
         }
         else if (current_app == APP_GAMES) {
-            if (event == BTN_ESCAPE || event == BTN_B) {
+            if ((event == BTN_ESCAPE || event == BTN_B) && !ui_is_in_game()) {
                 current_app = APP_HOME;
                 // Drain any in-flight DMA from games app before clearing
                 rg_display_drain();

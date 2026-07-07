@@ -3,6 +3,9 @@
 #include <string.h>
 #include <stdlib.h>
 #include "esp_heap_caps.h"
+#include "esp_log.h"
+
+static const char *TAG = "rg_gui";
 
 static void *rg_gui_dma_malloc(size_t size)
 {
@@ -18,6 +21,7 @@ static void rg_gui_send_dma_chunked(int x, int y, int w, int h, const uint16_t *
     int lines_per_chunk = 20;
     for (int cy = 0; cy < h; cy += lines_per_chunk) {
         int lines = (cy + lines_per_chunk <= h) ? lines_per_chunk : (h - cy);
+        ESP_LOGI(TAG, "chunk y=%d lines=%d", cy, lines);
         memcpy(dma_chunk, &buf[cy * w], lines * w * sizeof(uint16_t));
         rg_display_write(x, y + cy, w, lines, w * 2, dma_chunk);
         rg_display_drain();
@@ -151,6 +155,7 @@ void rg_gui_draw_text(int x, int y, const char *text, uint16_t color, uint16_t b
             }
         }
         rg_display_write(x + i * 8, y, 8, 8, 8 * 2, char_buf);
+        rg_display_drain();
     }
 }
 
@@ -167,6 +172,8 @@ void rg_gui_draw_rect(int x, int y, int w, int h, uint16_t color)
     if (max_lines == 0) max_lines = 1;
     if (max_lines > h) max_lines = h;
 
+    ESP_LOGI(TAG, "rect w=%d h=%d max_lines=%d", w, h, max_lines);
+
     // Byte-swap for ILI9341 big-endian RGB565 (ESP32 is little-endian)
     uint16_t color_sw = ((color >> 8) | (color << 8));
     int fill_count = w * max_lines;
@@ -177,10 +184,9 @@ void rg_gui_draw_rect(int x, int y, int w, int h, uint16_t color)
         int lines = h - lines_sent;
         if (lines > max_lines) lines = max_lines;
         rg_display_write(x, y + lines_sent, w, lines, w * 2, rect_buf);
+        rg_display_drain();
         lines_sent += lines;
     }
-    // Drain in-flight DMA so rect_buf is safe to reuse on next call
-    rg_display_drain();
 }
 
 void rg_gui_clear(uint16_t color)

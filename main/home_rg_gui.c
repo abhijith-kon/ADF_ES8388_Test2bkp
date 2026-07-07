@@ -200,7 +200,7 @@ static void draw_app_node(int idx) {
     int blit_half = blit_size / 2;
 
     // Quad buffering: 4 buffers to prevent DMA corruption across multiple frames
-    static uint16_t node_bufs[4][NODE_SIZE * NODE_SIZE];
+    static uint16_t node_bufs[4][NODE_SIZE * NODE_SIZE] __attribute__((aligned(4)));
     static int buf_idx = 0;
     buf_idx = (buf_idx + 1) % 4;
     uint16_t *node_buf = node_bufs[buf_idx];
@@ -263,6 +263,7 @@ static void draw_app_node(int idx) {
     }
 
     rg_display_write(cx - blit_half, cy - blit_half, blit_size, blit_size, blit_size * 2, node_buf);
+    rg_display_drain();
 }
 
 void home_ui_draw(void) {
