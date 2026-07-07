@@ -10,8 +10,15 @@
 #include <stdlib.h>
 #include <math.h>
 #include "esp_heap_caps.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "UI";
+
+static void draw_games_list(void);
 
 #define SCREEN_W 240
 #define SCREEN_H 320
@@ -39,6 +46,49 @@ static game_state_t current_game_state = GAME_STATE_MENU;
 bool ui_is_in_game(void)
 {
     return current_game_state != GAME_STATE_MENU;
+}
+
+static void launch_retro_go(void)
+{
+    ESP_LOGI(TAG, "Launching Retro-Go via OTA...");
+
+    // Show loading screen
+    rg_display_drain();
+    rg_gui_clear(0x0000);
+    rg_gui_set_font_size(16);
+    rg_gui_draw_text_box(0, 140, 240, 40, 0x0000, "LOADING RETRO-GO...");
+    rg_display_drain();
+    rg_gui_set_font_size(8);
+
+    // Find ota_0 partition
+    const esp_partition_t *retro_part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, NULL
+    );
+
+    if (retro_part) {
+        esp_err_t err = esp_ota_set_boot_partition(retro_part);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Boot partition set to ota_0, restarting...");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            esp_restart();
+        } else {
+            ESP_LOGE(TAG, "Failed to set boot partition: %s", esp_err_to_name(err));
+            rg_gui_clear(0x0000);
+            rg_gui_draw_text_box(0, 140, 240, 40, RG_COLOR_RGB(200, 30, 30), "OTA SET FAILED!");
+            rg_display_drain();
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            current_game_state = GAME_STATE_MENU;
+            draw_games_list();
+        }
+    } else {
+        ESP_LOGE(TAG, "Retro-Go partition (ota_0) not found!");
+        rg_gui_clear(0x0000);
+        rg_gui_draw_text_box(0, 140, 240, 40, RG_COLOR_RGB(200, 30, 30), "NO RETRO-GO FW!");
+        rg_display_drain();
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        current_game_state = GAME_STATE_MENU;
+        draw_games_list();
+    }
 }
 
 // ---- Rounded Box Helper ----
@@ -207,7 +257,8 @@ void ui_handle_input(button_event_t event)
             current_game_state = GAME_STATE_PONG;
             game_pong_start();
         } else if (selected_game == 3) { // RETRO-GO
-            // Future launcher
+            rg_display_drain();
+            launch_retro_go();
         }
     }
 }

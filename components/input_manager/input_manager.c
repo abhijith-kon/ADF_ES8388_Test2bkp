@@ -62,12 +62,12 @@ void input_manager_init(void)
 {
     gpio_config_t io_conf = {0};
 
-    // Buzzer on pin 48
+    // Audio Amplifier Enable (PA_EN) on pin 48
     io_conf.mode = GPIO_MODE_OUTPUT;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     io_conf.pin_bit_mask = (1ULL << GPIO_NUM_48);
     gpio_config(&io_conf);
-    gpio_set_level(GPIO_NUM_48, 0);
+    gpio_set_level(GPIO_NUM_48, 1); // 1 = Enable speaker/amplifier
 
     // 74HC165 outputs (PL, CLK)
     io_conf.mode = GPIO_MODE_OUTPUT;

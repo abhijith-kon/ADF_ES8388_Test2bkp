@@ -502,43 +502,49 @@ Both firmware environments share the same SD card. ROMs, cover art, BIOS files, 
 └── books/            # .txt files (Console OS Files app)
 ```
 
-### Implementation Phases
+### Implementation Progress
 
-#### Phase 1: Partition Table & OTA Infrastructure
-- Create `partitions.csv` with factory + ota_0 + storage layout.
-- Update Console OS `sdkconfig` to `CONFIG_PARTITION_TABLE_CUSTOM=y`.
-- Add `esp_ota_ops.h` calls to `ui.c` for the RETRO-GO launch bridge.
-- Verify `esp_restart()` correctly reboots between factory and ota_0 using a minimal test binary.
+#### Phase 1: Partition Table & OTA Infrastructure ✅ DONE
+- [x] Created `partitions.csv` — factory (3MB) + launcher/ota_0 (1MB) + retro-core/ota_1 (3MB) + storage (8.9MB)
+- [x] Updated `sdkconfig` → `CONFIG_PARTITION_TABLE_CUSTOM=y`, pointing to `partitions.csv`
+- [x] Updated `sdkconfig.defaults` with custom partition + 16MB flash settings
+- [x] Implemented `launch_retro_go()` in `ui.c` — OTA partition switch via `esp_ota_set_boot_partition()` + `esp_restart()`
+- [x] Wired RETRO-GO menu entry (`selected_game == 3`) to `launch_retro_go()`
+- [x] Added error handling: "NO RETRO-GO FW!" / "OTA SET FAILED!" screens with 2s timeout fallback to menu
+- [x] **HW TESTED:** Verified `esp_restart()` correctly reboots to `ota_0`. Confirmed bootloader failsafe successfully falls back to Console OS if Retro-Go partition is empty.
 
-#### Phase 2: Retro-Go Repository Clone & Target Creation
-- Clone `ducalex/retro-go` (branch `master`) into a sibling directory.
-- Create `components/retro-go/targets/retro-console-s3/` with `config.h`, `env.py`, and `sdkconfig`.
-- Register the target in `components/retro-go/config.h`.
-- Build using `python rg_tool.py --target=retro-console-s3 build-img`.
+#### Phase 2: Retro-Go Repository Clone & Target Creation ✅ DONE
+- [x] Cloned `ducalex/retro-go` into `C:\Users\Dell\esp\projects\retro-go`
+- [x] Created `components/retro-go/targets/retro-console-s3/config.h` with all HW pin mappings
+- [x] Created `targets/retro-console-s3/env.py` (IDF target = esp32s3)
+- [x] Created `targets/retro-console-s3/sdkconfig` (16MB flash, octal PSRAM, FATFS, 240MHz)
+- [x] Registered target in `components/retro-go/config.h`
+- [x] Return bridge: set `RG_APP_LAUNCHER = "factory"` so exit reboots to Console OS
+- [ ] **PENDING:** Build using `python rg_tool.py --target=retro-console-s3 build-img`
 
-#### Phase 3: Display Driver Verification
-- Confirm ILI9341 init sequence produces correct colors and orientation in portrait mode.
-- Match the Console OS Profile 2 contrast calibration (GVDD, VCOM, gamma curves).
-- Verify `RG_SCREEN_WIDTH=240`, `RG_SCREEN_HEIGHT=320` renders correctly in Retro-Go's scaling pipeline.
+#### Phase 3: Display Driver Verification ✅ DONE
+- [x] Confirmed ILI9341 init sequence matches Console OS Profile 2 calibration
+- [x] Added `RG_SCREEN_ROTATE 2` (180 degree flip) to correct upside-down rendering issue
 
-#### Phase 4: SD Card SDMMC 4-Bit Integration
-- Modify `rg_storage.c` SDMMC path for 4-bit mode with GPIO matrix pins (38/39/40/41/42/21).
-- Verify ROM loading, save state writing, and cover art reading from `/sd/roms/`, `/sd/retro-go/saves/`, and `/sd/romart/`.
+#### Phase 4: SD Card SDMMC 4-Bit Integration ✅ DONE
+- [x] Modified `rg_storage.c` for 4-bit SDMMC with GPIO matrix pins (38/39/40/41/42/21)
+- [x] **HW TESTED:** Verified ROM loading from `/sd/` (Doom loaded successfully)
 
-#### Phase 5: ES8388 Audio Driver
-- Implement ES8388 I2C initialization (codec mode, mixer disconnect, ADC power down) in Retro-Go's board init.
-- Configure I2S pins (MCLK=47, BCLK=15, WS=16, DOUT=17) in the external DAC I2S driver.
-- Verify emulator audio output through the ES8388 DAC to speakers/headphones.
+#### Phase 5: ES8388 Audio Driver ✅ DONE
+- [x] Added `RG_AUDIO_INIT_CUSTOM()` to `config.h` and hooked into `rg_system.c` to properly initialize the ES8388 over I2C on boot, fixing loud static/beeping on startup.
+- [x] I2S pins (BCK=15, WS=16, DATA=17, MCLK=47) configured in target config.h
+- [x] **HW TESTED:** Amplifier enable pin (GPIO 48) correctly driven HIGH to enable speaker output. SD card audio and Retro-Go audio verified working. Minor hardware ticking remains during soft-reboot transitions.
 
-#### Phase 6: 74HC165 Input Driver
-- Create `drivers/input/shift_register.h` implementing `rg_input_read_gamepad()`.
-- Map 74HC165 bits (GPIO 3/6/7) and KY-040 encoder (GPIO 1/2) to Retro-Go key constants.
-- Verify D-Pad, A/B, Menu, Start navigation works in the Retro-Go launcher and in-game.
+#### Phase 6: 74HC165 Input Driver ✅ DONE
+- [x] Used built-in `RG_GAMEPAD_SERIAL_MAP` (74HC165 protocol matches serial driver)
+- [x] Mapped 74HC165 bits (GPIO 3/6/7) to RG_KEY_* via serial map in config.h
+- [ ] **PENDING:** KY-040 encoder (GPIO 1/2) volume control hook
+- [x] **HW TESTED:** Verified D-Pad navigation (Enter/L/R) works in launcher
 
-#### Phase 7: Return Bridge & Polish
-- Modify `rg_system_switch_app("launcher")` to set factory partition and reboot.
-- Test full round-trip: Console OS → RETRO-GO → play a game → exit → Console OS.
-- Verify Console OS state restoration (home screen redraws cleanly after reboot).
+#### Phase 7: Return Bridge & Polish ✅ DONE
+- [x] Added "Quit to Console OS" button explicitly to the main About menu (`rg_gui_about_menu`).
+- [x] Modified `update_boot_config` to cleanly erase the `otadata` partition when `RG_APP_FACTORY` is requested.
+- [x] **HW TESTED:** Full round-trip Console OS → RETRO-GO → exit → Console OS works perfectly without manual resets.
 
 ### Advantages
 
@@ -557,5 +563,5 @@ Both firmware environments share the same SD card. ROMs, cover art, BIOS files, 
 ## Environment Paths
 - **ADF:** `C:\Users\Dell\esp\esp-adf`
 - **IDF:** `C:\Users\Dell\esp\v5.3.4\esp-idf`
-- **Retro-Go (to be cloned):** `C:\Users\Dell\esp\projects\retro-go`
+- **Retro-Go:** `C:\Users\Dell\esp\projects\retro-go`
 
