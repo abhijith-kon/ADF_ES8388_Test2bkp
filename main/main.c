@@ -271,7 +271,7 @@ void app_main(void)
                 rg_gui_clear(0x0000);
                 home_ui_force_redraw();
             } else {
-                // Future: Send input to ui.c or active game
+                ui_handle_input(event);
             }
         }
 

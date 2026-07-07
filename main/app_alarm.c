@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "rg_gui.h"
@@ -56,16 +57,35 @@ static void load_alarm_settings(void)
     }
 }
 
+static void set_buzzer(bool on)
+{
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, on ? 512 : 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
 void app_alarm_init(void)
 {
-    gpio_config_t io_conf = {
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .pin_bit_mask = (1ULL << GPIO_NUM_48)
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_LOW_SPEED_MODE,
+        .timer_num        = LEDC_TIMER_0,
+        .duty_resolution  = LEDC_TIMER_10_BIT,
+        .freq_hz          = 2700,
+        .clk_cfg          = LEDC_AUTO_CLK
     };
-    gpio_config(&io_conf);
-    gpio_set_level(GPIO_NUM_48, 0);
+    ledc_timer_config(&ledc_timer);
+
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode     = LEDC_LOW_SPEED_MODE,
+        .channel        = LEDC_CHANNEL_0,
+        .timer_sel      = LEDC_TIMER_0,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = GPIO_NUM_48,
+        .duty           = 0,
+        .hpoint         = 0
+    };
+    ledc_channel_config(&ledc_channel);
+
+    set_buzzer(false);
     load_alarm_settings();
     ESP_LOGI(TAG, "Alarm initialized: %02d:%02d [%s]", alarm_hour, alarm_min, alarm_enabled ? "ON" : "OFF");
 }
@@ -159,7 +179,7 @@ void app_alarm_silence(void)
 {
     if (is_ringing) {
         is_ringing = false;
-        gpio_set_level(GPIO_NUM_48, 0);
+        set_buzzer(false);
         ESP_LOGI(TAG, "Alarm silenced by user.");
     }
 }
@@ -242,10 +262,10 @@ void app_alarm_tick(void)
         if (now_ms - last_beep >= 200) {
             last_beep = now_ms;
             beep_state = !beep_state;
-            gpio_set_level(GPIO_NUM_48, beep_state ? 1 : 0);
+            set_buzzer(beep_state);
         }
     } else {
-        gpio_set_level(GPIO_NUM_48, 0);
+        set_buzzer(false);
     }
 
     if (in_ui) {
