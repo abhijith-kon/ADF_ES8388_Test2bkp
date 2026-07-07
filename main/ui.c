@@ -15,7 +15,7 @@ static const char *TAG = "UI";
 
 #define SCREEN_W 240
 #define SCREEN_H 320
-#define GAMES_BG RG_COLOR_RGB(16, 16, 21)
+#define GAMES_BG 0x0000
 
 static const char *games_list[] = {
     "TETRIS",
@@ -141,10 +141,6 @@ static void draw_games_list(void)
         }
     }
 
-    // Bottom Footer
-    rg_gui_draw_rect(0, 298, SCREEN_W, 1, RG_COLOR_RGB(80, 80, 80));
-    rg_gui_set_font_size(8);
-    rg_gui_draw_text_center(SCREEN_W / 2, 305, "UP/DOWN: Navigate");
 }
 
 void ui_init(void)

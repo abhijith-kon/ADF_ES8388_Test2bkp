@@ -140,13 +140,6 @@ static void draw_alarm_ui(void)
     rg_gui_set_text_color(box_fg);
     rg_gui_draw_text_box(30, 208, 180, 20, box_bg, min_str);
 
-    // Footer instructions
-    rg_gui_set_font_size(8);
-    rg_gui_set_text_color(RG_COLOR_RGB(120, 130, 150));
-    rg_gui_draw_text_box(0, 270, SCREEN_W, 15, BG_COLOR, "UP/DOWN: Adjust Value");
-    rg_gui_draw_text_box(0, 285, SCREEN_W, 15, BG_COLOR, "LEFT/RIGHT: Select Field");
-    rg_gui_draw_text_box(0, 300, SCREEN_W, 15, BG_COLOR, "ESC: Save & Return");
-
     rg_display_drain();
 }
 

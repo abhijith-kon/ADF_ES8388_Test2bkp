@@ -285,8 +285,6 @@ static void draw_file_list_ui(void)
     char stat_str[64];
     snprintf(stat_str, sizeof(stat_str), "Total TXT Files: %d", total_files);
     rg_gui_draw_text_center(SCREEN_W / 2, 250, stat_str);
-    rg_gui_draw_text_center(SCREEN_W / 2, 270, "UP/DOWN: Scroll List");
-    rg_gui_draw_text_center(SCREEN_W / 2, 290, "ENTER: Open Page View");
 }
 
 // ---- Page View Logic & UI ----
@@ -429,9 +427,6 @@ static void draw_page_view_ui(void)
 
     rg_gui_draw_rect(0, 20, SCREEN_W, 1, RG_COLOR_RGB(80, 80, 80));
 
-    // Bottom Instructions
-    rg_gui_draw_rect(0, 298, SCREEN_W, 1, RG_COLOR_RGB(80, 80, 80));
-    rg_gui_draw_text_center(SCREEN_W / 2, 305, "LEFT/RIGHT: Page | ENTER: RSVP");
 }
 
 // ---- RSVP Mode Logic & UI ----
@@ -569,11 +564,6 @@ static void draw_rsvp_ui(void)
     snprintf(wpm_str, sizeof(wpm_str), "RSVP | WPM: %d", rsvp_wpm);
     rg_gui_draw_text(6, 5, wpm_str, RG_COLOR_RGB(160, 80, 240), FILES_BG);
     rg_gui_draw_rect(0, 20, SCREEN_W, 1, RG_COLOR_RGB(80, 80, 80));
-
-    // Footer
-    rg_gui_draw_rect(0, 280, SCREEN_W, 1, RG_COLOR_RGB(80, 80, 80));
-    rg_gui_draw_text_center(SCREEN_W / 2, 290, "ENTER: Pause/Resume | UP/DOWN: WPM");
-    rg_gui_draw_text_center(SCREEN_W / 2, 305, "LEFT/RIGHT: Rewind/Skip | ESC: Page View");
 
     display_word();
 }

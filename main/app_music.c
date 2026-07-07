@@ -514,11 +514,8 @@ static void draw_music_header(void)
     rg_gui_set_text_color(RG_COLOR_WHITE);
     rg_gui_draw_text_box(0, TITLE_Y, SCREEN_W, TITLE_H, MUSIC_BG, "MUSIC");
     if (is_shuffle) {
-        rg_gui_draw_rect(210, 4, 18, 16, RG_COLOR_RGB(180, 100, 255));
-        rg_gui_set_font_size(8);
-        rg_gui_set_text_color(RG_COLOR_BLACK);
-        rg_gui_set_fill_color(RG_COLOR_RGB(180, 100, 255));
-        rg_gui_draw_text_center(210 + 9, 4 + 4, "S");
+        rg_gui_set_font_size(16);
+        rg_gui_draw_text(216, 4, "S", RG_COLOR_RGB(180, 100, 255), MUSIC_BG);
     }
     rg_gui_draw_rect(0, SEP1_Y, SCREEN_W, 1, SEP_COLOR);
 }
@@ -623,6 +620,7 @@ static void draw_player_metadata(void)
     rg_gui_draw_text_line(0, 50, SCREEN_W, 16, MUSIC_BG, RG_COLOR_RGB(200, 200, 210), display, 8);
 
     rg_gui_draw_rect(0, 72, SCREEN_W, 16, MUSIC_BG);
+    rg_gui_set_text_color(RG_COLOR_WHITE);
     rg_gui_draw_text_center(SCREEN_W / 2, 72, fmt_str);
 }
 
@@ -638,6 +636,7 @@ static void draw_player_timer(void)
 
     rg_gui_draw_rect(0, 90, SCREEN_W, 20, MUSIC_BG);
     rg_gui_set_font_size(8);
+    rg_gui_set_text_color(RG_COLOR_WHITE);
     rg_gui_draw_text_center(SCREEN_W / 2, 96, time_str);
 }
 
@@ -653,11 +652,9 @@ static void draw_player_top_area(bool full_redraw)
     rg_gui_set_fill_color(MUSIC_BG);
     rg_gui_draw_text_center(SCREEN_W / 2, 4, "NOW PLAYING");
     if (is_shuffle) {
-        rg_gui_draw_rect(210, 1, 18, 12, RG_COLOR_RGB(180, 100, 255));
         rg_gui_set_font_size(8);
-        rg_gui_set_text_color(RG_COLOR_BLACK);
-        rg_gui_set_fill_color(RG_COLOR_RGB(180, 100, 255));
-        rg_gui_draw_text_center(210 + 9, 1 + 2, "S");
+        rg_gui_draw_text(220, 3, "S", RG_COLOR_RGB(180, 100, 255), MUSIC_BG);
+        rg_gui_set_text_color(RG_COLOR_WHITE);
     }
     draw_player_title();
     draw_player_metadata();
