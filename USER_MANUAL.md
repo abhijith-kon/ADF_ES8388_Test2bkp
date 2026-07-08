@@ -77,10 +77,20 @@ Instead, Retro-Go applications are compiled individually and flashed manually to
 #### Console OS - Music Player
 - **Play / Pause:** Press `ENTER`.
 - **Next / Previous Track:** Press `RIGHT` / `LEFT`.
-- **Volume:** Use the rotary encoder or `UP` / `DOWN` buttons.
+- **Volume:** Use the rotary encoder or `UP` / `DOWN` buttons. (Global software volume scaling allows independent adjustments without affecting hardware codec baselines).
 - **Shuffle Mode:** Long-press `ENTER` (hold for >600ms).
-- **Thumbnail / Visualizer Toggle:** Press `A`.
+- **Thumbnail / Visualizer Toggle:** Press `A`. (Includes optimized JPEG caching and independent FFT visualization logic).
 - **Exit to List:** Press `ESCAPE`. (Returning to the list highlights the currently playing track).
+
+#### Console OS - Audio FX
+- Adjust 10-band Equalizer and Pitch/Speed shift using `UP`/`DOWN` to change frequency bands, and `LEFT`/`RIGHT` to modify gains/values.
+
+#### Console OS - Files & Text Reader
+- Smooth text scrolling: Hover over long `.TXT` files in the menu to automatically scroll the filename horizontally.
+- Read files: Press `ENTER` to open.
+
+#### Console OS - File Transfer
+- Contains scaffolding for upcoming wireless transfer protocols (WAP, OTG, OTA).
 
 #### Retro-Go - DOOM (PrBoom-Go)
 We custom-mapped the controls to make Doom fully playable on the console without a keyboard:

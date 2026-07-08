@@ -45,6 +45,8 @@ static char (*file_list)[128] = NULL;
 static int total_files = 0;
 static int selected_index = 0;
 static int view_start = 0;
+static int file_scroll_offset = 0;
+static int64_t file_scroll_timer = 0;
 
 // Page & RSVP State
 static FILE *current_file = NULL;
@@ -252,7 +254,27 @@ static void draw_file_item(int slot)
     }
 
     rg_gui_set_font_size(8);
-    rg_gui_draw_text_line(12, y + 12, 216, 16, bg, fg, file_list[idx], 4);
+
+    if (is_sel) {
+        char display_name[MAX_NAME_CHARS + 1];
+        int len = strlen(file_list[idx]);
+        if (len > MAX_NAME_CHARS) {
+            int max_ofs = len - MAX_NAME_CHARS;
+            int ofs = file_scroll_offset;
+            if (ofs > max_ofs) ofs = max_ofs;
+            strncpy(display_name, &file_list[idx][ofs], MAX_NAME_CHARS);
+            display_name[MAX_NAME_CHARS] = '\0';
+        } else {
+            strncpy(display_name, file_list[idx], MAX_NAME_CHARS);
+            display_name[MAX_NAME_CHARS] = '\0';
+        }
+        rg_gui_draw_text_line(12, y + 12, 216, 16, bg, fg, display_name, 4);
+    } else {
+        char display_name[MAX_NAME_CHARS + 1];
+        strncpy(display_name, file_list[idx], MAX_NAME_CHARS);
+        display_name[MAX_NAME_CHARS] = '\0';
+        rg_gui_draw_text_line(12, y + 12, 216, 16, bg, fg, display_name, 4);
+    }
 
     if (slot < 5 && slot != 1 && slot != 2) {
         rg_gui_draw_rect(14, y + 32, 212, 1, RG_COLOR_RGB(40, 40, 45));
@@ -614,11 +636,13 @@ void app_files_handle_input(button_event_t event)
         if (event == BTN_UP || event == BTN_VOL_DOWN) {
             selected_index--;
             if (selected_index < 0) selected_index = total_files - 1;
+            file_scroll_offset = 0;
             ensure_cursor_visible();
             draw_file_list_ui();
         } else if (event == BTN_DOWN || event == BTN_VOL_UP) {
             selected_index++;
             if (selected_index >= total_files) selected_index = 0;
+            file_scroll_offset = 0;
             ensure_cursor_visible();
             draw_file_list_ui();
         } else if (event == BTN_ENTER || event == BTN_A) {
@@ -682,10 +706,26 @@ void app_files_handle_input(button_event_t event)
 
 void app_files_tick(void)
 {
+    int64_t now = esp_timer_get_time() / 1000;
+    
+    if (app_mode == 0 && total_files > 0) {
+        int len = strlen(file_list[selected_index]);
+        if (len > MAX_NAME_CHARS) {
+            if (now - file_scroll_timer >= 200) {
+                file_scroll_timer = now;
+                file_scroll_offset++;
+                if (file_scroll_offset > len - MAX_NAME_CHARS + 3) {
+                    file_scroll_offset = 0;
+                }
+                draw_file_item(2); // Partial redraw instead of full screen redraw
+            }
+        }
+    }
+
     if (app_mode == 2 && !rsvp_paused) {
-        int64_t now = esp_timer_get_time();
-        if ((now - last_word_time) >= (int64_t)rsvp_delay_ms * 1000ULL) {
-            last_word_time = now;
+        int64_t now_us = esp_timer_get_time();
+        if ((now_us - last_word_time) >= (int64_t)rsvp_delay_ms * 1000ULL) {
+            last_word_time = now_us;
             if (get_next_word()) {
                 display_word();
             } else {

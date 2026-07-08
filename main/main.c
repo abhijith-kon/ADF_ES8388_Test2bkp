@@ -21,8 +21,25 @@
 #include "app_alarm.h"
 #include "app_radio.h"
 #include "ui.h" // Retro-OS games launcher
+#include "app_audio_fx.h"
+#include "app_wifi.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "es8388.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "MAIN";
+
+int global_volume = 80;
+static audio_hal_handle_t s_hal = NULL;
+
+void global_volume_set(int vol) {
+    if (vol > 100) vol = 100;
+    if (vol < 0) vol = 0;
+    global_volume = vol;
+    // Hardware volume is fixed to 100, volume is handled in software.
+}
 
 typedef enum {
     APP_HOME,
@@ -30,7 +47,9 @@ typedef enum {
     APP_MUSIC,
     APP_ALARM,
     APP_GAMES,
-    APP_RADIO
+    APP_RADIO,
+    APP_AUDIO_FX,
+    APP_WIFI
 } app_state_t;
 
 static app_state_t current_app = APP_HOME;
@@ -164,8 +183,10 @@ void app_main(void)
 
     board_handle = audio_board_init();
     if (board_handle) {
-        audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_DECODE, AUDIO_HAL_CTRL_START);
-        audio_hal_set_volume(board_handle->audio_hal, 80);
+        audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
+        
+        s_hal = board_handle->audio_hal;
+        audio_hal_set_volume(s_hal, 70); // Lock hardware volume to 70 (new 100% limit)
         es8388_fix_output_mixer();
         rtc_sync_from_ds3231();
     } else {
@@ -202,6 +223,8 @@ void app_main(void)
     app_files_init();
     app_music_init(board_handle->audio_hal);
     app_alarm_init();
+    app_audio_fx_init();
+    app_wifi_init();
     home_ui_init();
 
     ESP_LOGI(TAG, "System ready. Entering HOME.");
@@ -209,6 +232,16 @@ void app_main(void)
     while (1) {
         button_event_t event = input_manager_get_event();
         
+        // --- GLOBAL INPUT OVERRIDES ---
+        if (event == BTN_VOL_UP || event == BTN_VOL_DOWN) {
+            if (event == BTN_VOL_UP) {
+                global_volume_set(global_volume + 10);
+            } else {
+                global_volume_set(global_volume - 10);
+            }
+            // Let the event fall through so apps (like music) can update their volume UI
+        }
+
         // --- INPUT ROUTING ---
         if (current_app == APP_HOME) {
             if (event == BTN_LEFT) home_ui_move_left();
@@ -226,6 +259,14 @@ void app_main(void)
                 else if (selected == 2) { // APP_RADIO
                     current_app = APP_RADIO;
                     app_radio_start();
+                }
+                else if (selected == 3) { // APP_WIFI
+                    current_app = APP_WIFI;
+                    app_wifi_start();
+                }
+                else if (selected == 4) { // APP_AUDIO_FX
+                    current_app = APP_AUDIO_FX;
+                    app_audio_fx_start();
                 }
                 else if (selected == 6) { // APP_ALARM
                     current_app = APP_ALARM;
@@ -293,6 +334,28 @@ void app_main(void)
                 app_radio_handle_input(event);
             }
         }
+        else if (current_app == APP_WIFI) {
+            if (event == BTN_ESCAPE) {
+                app_wifi_stop();
+                current_app = APP_HOME;
+                rg_display_drain();
+                rg_gui_clear(0x0000);
+                home_ui_force_redraw();
+            } else {
+                app_wifi_handle_input(event);
+            }
+        }
+        else if (current_app == APP_AUDIO_FX) {
+            if (event == BTN_ESCAPE) {
+                app_audio_fx_stop();
+                current_app = APP_HOME;
+                rg_display_drain();
+                rg_gui_clear(0x0000);
+                home_ui_force_redraw();
+            } else {
+                app_audio_fx_handle_input(event);
+            }
+        }
 
         // --- RENDER LOOP & TICK ---
         if (current_app == APP_HOME) {
@@ -314,6 +377,9 @@ void app_main(void)
         }
         else if (current_app == APP_RADIO) {
             app_radio_tick();
+        }
+        else if (current_app == APP_AUDIO_FX) {
+            app_audio_fx_tick();
         }
 
         app_alarm_tick(); // Check and ring alarm across all apps

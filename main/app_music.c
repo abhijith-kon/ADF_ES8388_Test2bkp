@@ -22,6 +22,7 @@
 #include "rg_display.h"
 #include "es8388.h"
 #include "audio_volume.h"
+#include "app_audio_fx.h"
 #include <stdio.h>
 #include <math.h>
 #include "esp_heap_caps.h"
@@ -47,7 +48,8 @@ static bool is_playing = false;
 static bool pipeline_has_run = false;
 static audio_event_iface_handle_t evt = NULL;
 static audio_hal_handle_t music_hal_handle = NULL;
-static int current_volume = 80;
+extern int global_volume;
+extern void global_volume_set(int vol);
 
 // ---- Layout Constants ----
 #define SCREEN_W         240
@@ -111,6 +113,9 @@ static int player_scroll_char_offset = 0;
 static int64_t player_scroll_timer = 0;
 static int64_t last_vis_time = 0;
 static int64_t last_time_update = 0;
+
+static bool thumbnail_cached = false;
+static int thumbnail_cached_track = -1;
 
 // Volume bar state
 static bool vol_bar_visible = false;
@@ -257,6 +262,15 @@ static void sd_card_scan_task(void *arg)
 
 static int decoder_write_cb(audio_element_handle_t el, char *buffer, int len, TickType_t ticks_to_wait, void *ctx)
 {
+    // === DSP PROCESSING ===
+    if (len > 0) {
+        audio_element_info_t info = {0};
+        audio_element_getinfo(el, &info);
+        int sr = info.sample_rates > 0 ? info.sample_rates : 44100;
+        int ch = info.channels > 0 ? info.channels : 2;
+        len = dsp_process_pcm((unsigned char *)buffer, len, sr, ch);
+    }
+
     static int cnt = 0;
     if (++cnt % 100 == 0) {
         ESP_LOGI(TAG, "decoder callback %d bytes", len);
@@ -270,6 +284,13 @@ static int decoder_write_cb(audio_element_handle_t el, char *buffer, int len, Ti
             }
         }
         rb_write(fft_ringbuf, buffer, len, 0);
+    }
+    
+    if (len > 0) {
+        audio_element_info_t info = {0};
+        audio_element_getinfo(el, &info);
+        int ch = info.channels > 0 ? info.channels : 2;
+        apply_software_volume((unsigned char *)buffer, len, ch);
     }
     ringbuf_handle_t out_rb = (ringbuf_handle_t)ctx;
     if (out_rb) {
@@ -665,7 +686,7 @@ static void draw_volume_bar(void)
 {
     rg_gui_draw_rect(220, 138, 14, 164, RG_COLOR_WHITE);
     int interior_h = 160;
-    int fill_h = (current_volume * interior_h) / 100;
+    int fill_h = (global_volume * interior_h) / 100;
     if (fill_h < 0) fill_h = 0;
     if (fill_h > interior_h) fill_h = interior_h;
     int empty_h = interior_h - fill_h;
@@ -766,6 +787,7 @@ static UINT tjpg_out_func(JDEC *jd, void *bitmap, JRECT *rect)
             sess->out_img[dst_y * sess->out_w + dst_x] = color_sw;
         }
     }
+    vTaskDelay(pdMS_TO_TICKS(1)); // Yield to prevent watchdog reset during heavy JPEG decoding
     return 1;
 }
 
@@ -793,6 +815,12 @@ static void draw_player_thumbnail(void)
         if (!vis_buf) vis_buf = malloc(180 * 180 * sizeof(uint16_t));
     }
     if (!vis_buf) return;
+
+    if (thumbnail_cached && thumbnail_cached_track == current_track) {
+        send_vis_buf_to_display();
+        return;
+    }
+    thumbnail_cached = false;
 
     int box_s = 180;
     uint16_t bg_sw = (uint16_t)((MUSIC_BG >> 8) | (MUSIC_BG << 8));
@@ -860,6 +888,8 @@ static void draw_player_thumbnail(void)
                                             }
                                         }
                                         drawn_ok = true;
+                                        thumbnail_cached = true;
+                                        thumbnail_cached_track = current_track;
                                         ESP_LOGI(TAG, "Thumbnail decompressed OK (%lu x %lu -> %d x %d)", (unsigned long)jd.width, (unsigned long)jd.height, draw_w, draw_h);
                                     } else {
                                         ESP_LOGW(TAG, "jd_decomp failed: %d", (int)res_dec);
@@ -905,6 +935,7 @@ static void draw_player_thumbnail(void)
 static void draw_player_visualizer(void)
 {
     if (show_thumbnail || !vis_buf) return;
+    thumbnail_cached = false;
     init_fft_state();
 
     int box_s = 180;
@@ -1440,11 +1471,7 @@ static int get_prev_track_idx(void)
 
 static void set_es8388_volume(int vol)
 {
-    uint8_t reg_val = (uint8_t)(((100 - vol) * 192) / 100);
-    // Write L and R channel volumes, retrying if I2C NACK occurs during heavy SD/I2S DMA streaming
-    while (es8388_write_reg(ES8388_DACCONTROL4, reg_val) != ESP_OK) { vTaskDelay(1); }
-    while (es8388_write_reg(ES8388_DACCONTROL5, reg_val) != ESP_OK) { vTaskDelay(1); }
-    ESP_LOGI(TAG, "Volume set to %d (reg=0x%02x)", vol, reg_val);
+    global_volume_set(vol);
 }
 
 void app_music_handle_input(button_event_t event)
@@ -1452,8 +1479,8 @@ void app_music_handle_input(button_event_t event)
     switch (event) {
         case BTN_UP:
             if (in_player_ui) {
-                current_volume = (current_volume + 10 > 100) ? 100 : current_volume + 10;
-                set_es8388_volume(current_volume);
+                global_volume = (global_volume + 10 > 100) ? 100 : global_volume + 10;
+                set_es8388_volume(global_volume);
                 vol_bar_visible = true;
                 vol_bar_timer = esp_timer_get_time() / 1000;
                 draw_volume_bar();
@@ -1470,8 +1497,8 @@ void app_music_handle_input(button_event_t event)
             break;
         case BTN_DOWN:
             if (in_player_ui) {
-                current_volume = (current_volume - 10 < 0) ? 0 : current_volume - 10;
-                set_es8388_volume(current_volume);
+                global_volume = (global_volume - 10 < 0) ? 0 : global_volume - 10;
+                set_es8388_volume(global_volume);
                 vol_bar_visible = true;
                 vol_bar_timer = esp_timer_get_time() / 1000;
                 draw_volume_bar();
@@ -1609,8 +1636,8 @@ void app_music_handle_input(button_event_t event)
             break;
         case BTN_VOL_UP:
             {
-                current_volume = (current_volume + 10 > 100) ? 100 : current_volume + 10;
-                set_es8388_volume(current_volume);
+                global_volume = (global_volume + 10 > 100) ? 100 : global_volume + 10;
+                set_es8388_volume(global_volume);
                 if (in_player_ui) {
                     vol_bar_visible = true;
                     vol_bar_timer = esp_timer_get_time() / 1000;
@@ -1620,8 +1647,8 @@ void app_music_handle_input(button_event_t event)
             break;
         case BTN_VOL_DOWN:
             {
-                current_volume = (current_volume - 10 < 0) ? 0 : current_volume - 10;
-                set_es8388_volume(current_volume);
+                global_volume = (global_volume - 10 < 0) ? 0 : global_volume - 10;
+                set_es8388_volume(global_volume);
                 if (in_player_ui) {
                     vol_bar_visible = true;
                     vol_bar_timer = esp_timer_get_time() / 1000;
