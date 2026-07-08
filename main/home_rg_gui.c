@@ -43,12 +43,12 @@ typedef struct {
 
 static const home_app_t home_apps[NUM_APPS] = {
     // Preserve existing layout, migrating icon_y_shift values to icon_dy
-    {"APP_FILES",  "FILES",         icon_files,   0, -75,  0,  0},
+    {"APP_FILES",  "RSVP",          icon_files,   0, -75,  0,  0},
     {"APP_MUSIC",  "MUSIC",         icon_music,  53, -53,  0,  0},
     {"APP_RADIO",  "RADIO",         icon_radio,  75,   0,  0,  0},
-    {"APP_WIFI",   "FILE TRANSFER", icon_wifi,   53,  53,  0, -2},
+    {"APP_WIFI",   "DOWNLOAD",      icon_wifi,   53,  53,  0, -2},
     {"APP_DSP",    "AUDIO FX",      icon_dsp,     0,  75,  0,  0},
-    {"APP_VOL",    "VOLUME",        icon_vol,   -53,  53,  0, -3},
+    {"APP_VOL",    "SETTINGS",      icon_vol,   -53,  53,  0, -3},
     {"APP_ALARM",  "ALARM",         icon_alarm, -75,   0,  0, -1},
     {"APP_GAMES",  "GAMES",         icon_games, -53, -53,  0, -2},
 };

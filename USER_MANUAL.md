@@ -85,12 +85,14 @@ Instead, Retro-Go applications are compiled individually and flashed manually to
 #### Console OS - Audio FX
 - Adjust 10-band Equalizer and Pitch/Speed shift using `UP`/`DOWN` to change frequency bands, and `LEFT`/`RIGHT` to modify gains/values.
 
-#### Console OS - Files & Text Reader
+#### Console OS - RSVP (Text Reader)
 - Smooth text scrolling: Hover over long `.TXT` files in the menu to automatically scroll the filename horizontally.
 - Read files: Press `ENTER` to open.
+- Delete files: Press `B` over any file in the list to trigger a deletion confirmation popup.
 
-#### Console OS - File Transfer
-- Contains scaffolding for upcoming wireless transfer protocols (WAP, OTG, OTA).
+#### Console OS - Download (File Transfer)
+- WAP File Transfer: Press `ENTER` on WAP to launch the Wi-Fi Access Point (`RetroConsole`). Connect your phone to it and go to `192.168.4.1` to upload files directly to the SD card.
+- Automatic Time Sync: The moment you open the WAP upload page on your phone, your console's RTC clock automatically syncs to your phone's exact local time!
 
 #### Retro-Go - DOOM (PrBoom-Go)
 We custom-mapped the controls to make Doom fully playable on the console without a keyboard:

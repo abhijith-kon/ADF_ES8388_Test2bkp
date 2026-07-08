@@ -307,6 +307,20 @@ static void draw_file_list_ui(void)
     char stat_str[64];
     snprintf(stat_str, sizeof(stat_str), "Total TXT Files: %d", total_files);
     rg_gui_draw_text_center(SCREEN_W / 2, 250, stat_str);
+
+    if (app_mode == 3) {
+        rg_gui_draw_rect(20, 100, 200, 120, RG_COLOR_RGB(50, 0, 0));
+        rg_gui_set_font_size(16);
+        rg_gui_draw_text_center(SCREEN_W / 2, 120, "DELETE FILE?");
+        rg_gui_set_font_size(8);
+        
+        char display_name[30];
+        strncpy(display_name, file_list[selected_index], 29);
+        display_name[29] = '\0';
+        rg_gui_draw_text_center(SCREEN_W / 2, 150, display_name);
+        
+        rg_gui_draw_text_center(SCREEN_W / 2, 190, "[A] YES   [B] NO");
+    }
 }
 
 // ---- Page View Logic & UI ----
@@ -624,7 +638,7 @@ void app_files_stop(void)
 
 bool app_files_is_in_page_view(void)
 {
-    return (app_mode == 1 || app_mode == 2);
+    return (app_mode == 1 || app_mode == 2 || app_mode == 3);
 }
 
 void app_files_handle_input(button_event_t event)
@@ -647,6 +661,23 @@ void app_files_handle_input(button_event_t event)
             draw_file_list_ui();
         } else if (event == BTN_ENTER || event == BTN_A) {
             open_text_file(file_list[selected_index]);
+        } else if (event == BTN_B) {
+            app_mode = 3;
+            draw_file_list_ui();
+        }
+    } else if (app_mode == 3) { // Delete Confirm
+        if (event == BTN_A || event == BTN_ENTER) {
+            char path[256];
+            snprintf(path, sizeof(path), "/sdcard/%s", file_list[selected_index]);
+            remove(path);
+            app_mode = 0;
+            load_file_list();
+            if (selected_index >= total_files) selected_index = total_files > 0 ? total_files - 1 : 0;
+            ensure_cursor_visible();
+            draw_file_list_ui();
+        } else if (event == BTN_B || event == BTN_ESCAPE) {
+            app_mode = 0;
+            draw_file_list_ui();
         }
     } else if (app_mode == 1) { // Page View
         if (event == BTN_RIGHT || event == BTN_DOWN || event == BTN_VOL_UP) {

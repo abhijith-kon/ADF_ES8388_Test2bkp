@@ -8,5 +8,6 @@ void app_wifi_init(void);
 void app_wifi_start(void);
 void app_wifi_stop(void);
 void app_wifi_handle_input(button_event_t event);
+void app_wifi_tick(void);
 
 #endif // APP_WIFI_H

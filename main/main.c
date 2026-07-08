@@ -378,6 +378,9 @@ void app_main(void)
         else if (current_app == APP_RADIO) {
             app_radio_tick();
         }
+        else if (current_app == APP_WIFI) {
+            app_wifi_tick();
+        }
         else if (current_app == APP_AUDIO_FX) {
             app_audio_fx_tick();
         }
