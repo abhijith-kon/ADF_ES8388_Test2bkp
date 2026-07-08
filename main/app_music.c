@@ -1517,31 +1517,57 @@ void app_music_handle_input(button_event_t event)
             }
             break;
         case BTN_ENTER:
-            if (total_tracks > 0) {
-                if (in_player_ui) {
-                    if (is_playing) {
-                        pause_current_track();
-                    } else if (pipeline_has_run) {
-                        resume_current_track();
-                    }
-                    if (show_thumbnail) {
-                        draw_player_thumbnail();
-                    } else {
-                        draw_player_visualizer();
+            {
+                int64_t now = esp_timer_get_time() / 1000;
+                static int64_t enter_first_press = 0;
+                static int64_t enter_last_event = 0;
+                static bool shuffle_toggled = false;
+
+                if (now - enter_last_event > 400) {
+                    enter_first_press = now;
+                    shuffle_toggled = false;
+                    
+                    if (total_tracks > 0) {
+                        if (in_player_ui) {
+                            if (is_playing) {
+                                pause_current_track();
+                            } else if (pipeline_has_run) {
+                                resume_current_track();
+                            }
+                            if (show_thumbnail) {
+                                draw_player_thumbnail();
+                            } else {
+                                draw_player_visualizer();
+                            }
+                        } else {
+                            if (selected_index == current_track && is_playing) {
+                                // Already playing, just open player ui
+                            } else if (selected_index == current_track && !is_playing && pipeline_has_run) {
+                                resume_current_track();
+                            } else {
+                                play_track(selected_index);
+                            }
+                            in_player_ui = true;
+                            player_scroll_char_offset = 0;
+                            player_scroll_timer = esp_timer_get_time() / 1000;
+                            draw_player_ui_full();
+                        }
                     }
                 } else {
-                    if (selected_index == current_track && is_playing) {
-                        // Already playing, just open player ui
-                    } else if (selected_index == current_track && !is_playing && pipeline_has_run) {
-                        resume_current_track();
-                    } else {
-                        play_track(selected_index);
+                    // Holding
+                    if (!shuffle_toggled && (now - enter_first_press > 600)) {
+                        is_shuffle = !is_shuffle;
+                        shuffle_toggled = true;
+                        ESP_LOGI(TAG, "Shuffle mode: %s", is_shuffle ? "ON" : "OFF");
+                        if (in_player_ui) {
+                            draw_player_top_area(true);
+                        } else {
+                            list_full_dirty = true;
+                            draw_music_full_ui();
+                        }
                     }
-                    in_player_ui = true;
-                    player_scroll_char_offset = 0;
-                    player_scroll_timer = esp_timer_get_time() / 1000;
-                    draw_player_ui_full();
                 }
+                enter_last_event = now;
             }
             break;
         case BTN_A:
@@ -1580,14 +1606,6 @@ void app_music_handle_input(button_event_t event)
             }
             break;
         case BTN_B:
-            is_shuffle = !is_shuffle;
-            ESP_LOGI(TAG, "Shuffle mode: %s", is_shuffle ? "ON" : "OFF");
-            if (in_player_ui) {
-                draw_player_top_area(true);
-            } else {
-                list_full_dirty = true;
-                draw_music_full_ui();
-            }
             break;
         case BTN_VOL_UP:
             {
