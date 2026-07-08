@@ -176,6 +176,25 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+#include "driver/i2c.h"
+
+static uint8_t dec2bcd(uint8_t val) { return ((val / 10 * 16) + (val % 10)); }
+
+static void update_ds3231(time_t ts) {
+    struct tm tinfo;
+    localtime_r(&ts, &tinfo);
+    uint8_t data[8];
+    data[0] = 0x00; // register address
+    data[1] = dec2bcd(tinfo.tm_sec);
+    data[2] = dec2bcd(tinfo.tm_min);
+    data[3] = dec2bcd(tinfo.tm_hour);
+    data[4] = dec2bcd(tinfo.tm_wday + 1); // 1-7
+    data[5] = dec2bcd(tinfo.tm_mday);
+    data[6] = dec2bcd(tinfo.tm_mon + 1);
+    data[7] = dec2bcd(tinfo.tm_year % 100);
+    i2c_master_write_to_device(I2C_NUM_0, 0x68, data, 8, 1000 / portTICK_PERIOD_MS);
+}
+
 static esp_err_t sync_time_get_handler(httpd_req_t *req)
 {
     char val[32];
@@ -187,7 +206,8 @@ static esp_err_t sync_time_get_handler(httpd_req_t *req)
                 time_t ts = atol(val);
                 struct timeval tv = { .tv_sec = ts, .tv_usec = 0 };
                 settimeofday(&tv, NULL);
-                ESP_LOGI(TAG, "Time synced from WAP: %ld", (long)ts);
+                update_ds3231(ts);
+                ESP_LOGI(TAG, "Time synced from WAP & DS3231 updated: %ld", (long)ts);
             }
         }
         free(query);
