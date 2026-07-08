@@ -548,6 +548,12 @@ Both firmware environments share the same SD card. ROMs, cover art, BIOS files, 
 - [x] Modified `update_boot_config` to cleanly erase the `otadata` partition when `RG_APP_FACTORY` is requested.
 - [x] **HW TESTED:** Full round-trip Console OS → RETRO-GO → exit → Console OS works perfectly without manual resets.
 
+#### Phase 8: Console OS Polish & Bugfixes ✅ DONE
+- [x] **I2C Volume Bug:** Replaced unverified `es8388_write_reg` I2C calls with a robust retry loop to prevent asymmetrical left/right volumes when the I2C bus NACKs due to heavy SD/I2S DMA streaming contention.
+- [x] **ADF Core Bugfix:** Fixed a critical bug in ESP-ADF's `i2c_bus_v2.c` `AUDIO_RET_ON_FALSE` macro that silently converted `ESP_ERR_TIMEOUT` into `ESP_OK`.
+- [x] **RNG Seed:** Added `srand(esp_random())` at startup to ensure the music shuffle and game spawns are truly randomized instead of using the default deterministic sequence.
+- [x] **Game Balancing:** Scaled up Pong base speed (60 FPS) and increased paddle/ball velocity. Sped up Tetris piece dropping and increased the speed scaling per level.
+
 ### Advantages
 
 - **Clean separation**: Multimedia applications and emulation firmware are completely independent.

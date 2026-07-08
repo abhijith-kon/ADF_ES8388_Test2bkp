@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "nvs_flash.h"
 #include "input_manager.h"
 #include "../components/my_board/my_board_v1_0/board.h"
@@ -151,6 +152,7 @@ static void es8388_fix_output_mixer(void) {
 
 void app_main(void)
 {
+    srand(esp_random());
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());

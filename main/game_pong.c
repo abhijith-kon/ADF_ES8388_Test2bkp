@@ -115,8 +115,8 @@ static void init_level(void) {
     paddle_x = (CANV_W / 2) - (PADDLE_W / 2);
     ball_x = CANV_W / 2 - (BALL_SIZE / 2);
     ball_y = CANV_H - 12 - PADDLE_H - BALL_SIZE - 2;
-    ball_dx = (rand() % 2 == 0) ? 3 : -3;
-    ball_dy = -4;
+    ball_dx = (rand() % 2 == 0) ? 4 : -4;
+    ball_dy = -5;
     ball_launched = false;
 }
 
@@ -145,7 +145,7 @@ void game_pong_start(void) {
 void game_pong_tick(void) {
     if (game_over) return;
     int64_t now = esp_timer_get_time();
-    if (now - last_frame_time < 25000) return; // ~40 FPS
+    if (now - last_frame_time < 16666) return; // ~60 FPS
     last_frame_time = now;
     
     if (!ball_launched) {
@@ -191,7 +191,7 @@ void game_pong_tick(void) {
             ball_dy = -abs(ball_dy);
             int hit_pos = (ball_x + (BALL_SIZE / 2)) - (paddle_x + (PADDLE_W / 2));
             ball_dx = hit_pos / 4;
-            if (ball_dx == 0) ball_dx = (rand() % 2 == 0) ? 2 : -2;
+            if (ball_dx == 0) ball_dx = (rand() % 2 == 0) ? 3 : -3;
         }
     }
     
@@ -233,12 +233,12 @@ bool game_pong_input(button_event_t event) {
         ball_launched = true;
     }
     if (event == BTN_LEFT || event == BTN_VOL_DOWN) {
-        paddle_x -= 12;
+        paddle_x -= 18;
         if (paddle_x < 0) paddle_x = 0;
         if (!ball_launched) ball_x = paddle_x + (PADDLE_W / 2) - (BALL_SIZE / 2);
         render_game();
     } else if (event == BTN_RIGHT || event == BTN_VOL_UP) {
-        paddle_x += 12;
+        paddle_x += 18;
         if (paddle_x > CANV_W - PADDLE_W) paddle_x = CANV_W - PADDLE_W;
         if (!ball_launched) ball_x = paddle_x + (PADDLE_W / 2) - (BALL_SIZE / 2);
         render_game();

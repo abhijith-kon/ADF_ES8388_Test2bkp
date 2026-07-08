@@ -275,8 +275,8 @@ void game_tetris_start(void) {
 void game_tetris_tick(void) {
     if (game_over) return;
     int64_t now = esp_timer_get_time();
-    int64_t speed_us = 500000 - ((level - 1) * 35000);
-    if (speed_us < 115000) speed_us = 115000;
+    int64_t speed_us = 350000 - ((level - 1) * 45000);
+    if (speed_us < 80000) speed_us = 80000;
     
     if (now - last_drop_time >= speed_us) {
         last_drop_time = now;

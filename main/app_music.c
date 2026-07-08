@@ -1438,15 +1438,22 @@ static int get_prev_track_idx(void)
     return (current_track - 1 + total_tracks) % total_tracks;
 }
 
+static void set_es8388_volume(int vol)
+{
+    uint8_t reg_val = (uint8_t)(((100 - vol) * 192) / 100);
+    // Write L and R channel volumes, retrying if I2C NACK occurs during heavy SD/I2S DMA streaming
+    while (es8388_write_reg(ES8388_DACCONTROL4, reg_val) != ESP_OK) { vTaskDelay(1); }
+    while (es8388_write_reg(ES8388_DACCONTROL5, reg_val) != ESP_OK) { vTaskDelay(1); }
+    ESP_LOGI(TAG, "Volume set to %d (reg=0x%02x)", vol, reg_val);
+}
+
 void app_music_handle_input(button_event_t event)
 {
     switch (event) {
         case BTN_UP:
             if (in_player_ui) {
                 current_volume = (current_volume + 10 > 100) ? 100 : current_volume + 10;
-                uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
-                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
-                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
+                set_es8388_volume(current_volume);
                 vol_bar_visible = true;
                 vol_bar_timer = esp_timer_get_time() / 1000;
                 draw_volume_bar();
@@ -1464,9 +1471,7 @@ void app_music_handle_input(button_event_t event)
         case BTN_DOWN:
             if (in_player_ui) {
                 current_volume = (current_volume - 10 < 0) ? 0 : current_volume - 10;
-                uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
-                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
-                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
+                set_es8388_volume(current_volume);
                 vol_bar_visible = true;
                 vol_bar_timer = esp_timer_get_time() / 1000;
                 draw_volume_bar();
@@ -1587,10 +1592,7 @@ void app_music_handle_input(button_event_t event)
         case BTN_VOL_UP:
             {
                 current_volume = (current_volume + 10 > 100) ? 100 : current_volume + 10;
-                uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
-                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
-                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
-                ESP_LOGI(TAG, "Volume: %d (reg=0x%02x)", current_volume, reg_val);
+                set_es8388_volume(current_volume);
                 if (in_player_ui) {
                     vol_bar_visible = true;
                     vol_bar_timer = esp_timer_get_time() / 1000;
@@ -1601,10 +1603,7 @@ void app_music_handle_input(button_event_t event)
         case BTN_VOL_DOWN:
             {
                 current_volume = (current_volume - 10 < 0) ? 0 : current_volume - 10;
-                uint8_t reg_val = (uint8_t)(((100 - current_volume) * 192) / 100);
-                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
-                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
-                ESP_LOGI(TAG, "Volume: %d (reg=0x%02x)", current_volume, reg_val);
+                set_es8388_volume(current_volume);
                 if (in_player_ui) {
                     vol_bar_visible = true;
                     vol_bar_timer = esp_timer_get_time() / 1000;

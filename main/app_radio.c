@@ -277,6 +277,14 @@ void app_radio_stop(void)
     ESP_LOGI(TAG, "Radio App Stopped");
 }
 
+static void set_es8388_volume(int vol)
+{
+    uint8_t reg_val = (uint8_t)(((100 - vol) * 192) / 100);
+    while (es8388_write_reg(ES8388_DACCONTROL4, reg_val) != ESP_OK) { vTaskDelay(1); }
+    while (es8388_write_reg(ES8388_DACCONTROL5, reg_val) != ESP_OK) { vTaskDelay(1); }
+    ESP_LOGI(TAG, "Radio Volume set to %d (reg=0x%02x)", vol, reg_val);
+}
+
 void app_radio_handle_input(int button_event)
 {
     if (!in_radio_ui) return;
@@ -323,20 +331,12 @@ void app_radio_handle_input(int button_event)
             break;
         case BTN_VOL_UP:
             radio_vol = (radio_vol + 10 > 100) ? 100 : radio_vol + 10;
-            {
-                uint8_t reg_val = (uint8_t)(((100 - radio_vol) * 192) / 100);
-                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
-                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
-            }
+            set_es8388_volume(radio_vol);
             radio_tune(current_freq);
             break;
         case BTN_VOL_DOWN:
             radio_vol = (radio_vol - 10 < 0) ? 0 : radio_vol - 10;
-            {
-                uint8_t reg_val = (uint8_t)(((100 - radio_vol) * 192) / 100);
-                es8388_write_reg(ES8388_DACCONTROL4, reg_val);
-                es8388_write_reg(ES8388_DACCONTROL5, reg_val);
-            }
+            set_es8388_volume(radio_vol);
             radio_tune(current_freq);
             break;
         default:
