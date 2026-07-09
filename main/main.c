@@ -155,6 +155,11 @@ static void rtc_sync_from_ds3231(void) {
         struct timeval tv = { .tv_sec = mktime(&rtc_tm), .tv_usec = 0 };
         settimeofday(&tv, NULL);
         ESP_LOGI(TAG, "RTC DS3231 synced OK: %04d-%02d-%02d %02d:%02d:%02d", rtc_tm.tm_year + 1900, rtc_tm.tm_mon + 1, rtc_tm.tm_mday, rtc_tm.tm_hour, rtc_tm.tm_min, rtc_tm.tm_sec);
+        
+        // Ensure Oscillator runs on battery (clear EOSC in Control 0x0E) and clear OSF (Status 0x0F)
+        uint8_t ctrl[2] = {0x00, 0x00}; // Reg 0x0E and 0x0F to 0
+        reg = 0x0E;
+        i2c_bus_write_bytes(bus, DS3231_ADDR, &reg, 1, ctrl, 2);
     } else {
         ESP_LOGW(TAG, "Failed to communicate with RTC DS3231 over i2c_bus (err=%d), setting system time to build time", err);
         struct timeval tv = { .tv_sec = build_time, .tv_usec = 0 };
