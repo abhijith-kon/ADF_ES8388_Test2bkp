@@ -205,6 +205,24 @@ void app_main(void)
         .filter = false
     };
     rg_display_set_config(disp_conf);
+    // Draw random boot splash screen (240x320 with endian fix)
+    #include "esp_random.h"
+    #include "boot_images.h"
+    uint16_t *splash_buf = malloc(240 * 2);
+    if (splash_buf) {
+        int r_idx = esp_random() % NUM_BOOT_IMAGES;
+        const uint16_t *selected_img = boot_images[r_idx];
+        for (int y = 0; y < 320; y++) {
+            for (int x = 0; x < 240; x++) {
+                uint16_t p = selected_img[y * 240 + x];
+                splash_buf[x] = (p >> 8) | (p << 8); // Swap bytes for ILI9341
+            }
+            rg_display_write(0, y, 240, 1, 240 * 2, splash_buf);
+        }
+        free(splash_buf);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Show for 1 second
+
     input_manager_init();
 
     esp_periph_config_t periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
