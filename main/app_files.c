@@ -652,13 +652,17 @@ void app_files_handle_input(button_event_t event)
             if (selected_index < 0) selected_index = total_files - 1;
             file_scroll_offset = 0;
             ensure_cursor_visible();
-            draw_file_list_ui();
+            rg_gui_set_font_size(8);
+            for (int i = 0; i < VISIBLE_ITEMS; i++) draw_file_item(i);
+            rg_display_drain();
         } else if (event == BTN_DOWN || event == BTN_VOL_UP) {
             selected_index++;
             if (selected_index >= total_files) selected_index = 0;
             file_scroll_offset = 0;
             ensure_cursor_visible();
-            draw_file_list_ui();
+            rg_gui_set_font_size(8);
+            for (int i = 0; i < VISIBLE_ITEMS; i++) draw_file_item(i);
+            rg_display_drain();
         } else if (event == BTN_ENTER || event == BTN_A) {
             open_text_file(file_list[selected_index]);
         } else if (event == BTN_B) {

@@ -14,7 +14,12 @@
 #include "esp_http_server.h"
 #include <sys/param.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 #include <ctype.h>
+#include <dirent.h>
+#include "nvs_flash.h"
+#include "nvs.h"
+#include "esp_ota_ops.h"
 
 static void urldecode2(char *dst, const char *src) {
     char a, b;
@@ -129,7 +134,8 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
         free(query);
     }
 
-    snprintf(filepath, sizeof(filepath), "/sdcard/%s", filename);
+    mkdir("/sdcard/OTA", 0777);
+    snprintf(filepath, sizeof(filepath), "/sdcard/OTA/%s", filename);
     
     snprintf(wap_status_text, sizeof(wap_status_text), "Receiving %s...", filename);
     wap_progress = 0;
@@ -300,12 +306,69 @@ static void stop_wap_server(void)
 }
 
 
+#define MAX_OTA_FILES 10
+static char ota_files[MAX_OTA_FILES][128];
+static int ota_file_count = 0;
+static int ota_selected = 0;
+static char ota_error_msg[64] = {0};
+
+static void scan_ota_dir(void) {
+    ota_file_count = 0;
+    ota_error_msg[0] = '\0';
+    DIR *d = opendir("/sdcard/OTA");
+    if (!d) return;
+    struct dirent *dir;
+    while ((dir = readdir(d)) != NULL) {
+        if (strstr(dir->d_name, ".bin")) {
+            strncpy(ota_files[ota_file_count], dir->d_name, 127);
+            ota_file_count++;
+            if (ota_file_count >= MAX_OTA_FILES) break;
+        }
+    }
+    closedir(d);
+}
+
+static void trigger_ota(void) {
+    if (ota_file_count == 0) return;
+    const char *filename = ota_files[ota_selected];
+    
+    uint32_t target = 0; // OTA_CONSOLE
+    if (strstr(filename, "launcher")) target = 1;
+    else if (strstr(filename, "retro")) target = 2;
+    else if (strstr(filename, "prboom")) target = 3;
+    
+    char filepath[256];
+    snprintf(filepath, sizeof(filepath), "/sdcard/OTA/%s", filename);
+    
+    nvs_handle_t nvs;
+    if (nvs_open("ota", NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_u32(nvs, "target", target);
+        nvs_set_u32(nvs, "state", 1); // PENDING
+        nvs_set_str(nvs, "file", filepath);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+        
+        const esp_partition_t *updater = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_3, NULL);
+        if (updater) {
+            esp_ota_set_boot_partition(updater);
+            esp_restart();
+        } else {
+            snprintf(ota_error_msg, sizeof(ota_error_msg), "Updater partition not found!");
+            ui_dirty = true;
+        }
+    } else {
+        snprintf(ota_error_msg, sizeof(ota_error_msg), "NVS open failed!");
+        ui_dirty = true;
+    }
+}
+
 static void draw_rounded_box(int x, int y, int w, int h, int r, uint16_t fill_color, uint16_t border_color, int border_width)
 {
     rg_gui_draw_rect(x, y, w, h, fill_color);
 }
 
 static void draw_ui(void)
+
 {
     rg_gui_clear(APP_BG);
     
@@ -372,6 +435,37 @@ static void draw_ui(void)
         }
         
         rg_gui_draw_text_center(SCREEN_W / 2, 280, "Press B/ESC to Stop");
+    } else if (current_view == 3) { // OTA View
+        rg_gui_set_font_size(16);
+        rg_gui_draw_text_center(SCREEN_W / 2, 40, "OTA Update");
+
+        if (ota_error_msg[0] != '\0') {
+            rg_gui_set_font_size(12);
+            rg_gui_set_text_color(RG_COLOR_RGB(255, 0, 0));
+            rg_gui_draw_text_center(SCREEN_W / 2, 60, ota_error_msg);
+            rg_gui_set_text_color(RG_COLOR_WHITE);
+        }
+
+        if (ota_file_count == 0) {
+            rg_gui_set_font_size(12);
+            rg_gui_draw_text_center(SCREEN_W / 2, 160, "No firmware found in /OTA/");
+        } else {
+            for (int i = 0; i < ota_file_count; i++) {
+                int y = 80 + i * 25;
+                bool is_sel = (i == ota_selected);
+                uint16_t bg = is_sel ? RG_COLOR_RGB(100, 60, 200) : APP_BG;
+
+                if (is_sel) {
+                    draw_rounded_box(10, y, 220, 20, 4, bg, bg, 0);
+                }
+                
+                rg_gui_set_font_size(8);
+                rg_gui_draw_text_center(SCREEN_W / 2, y + 4, ota_files[i]);
+            }
+        }
+        
+        rg_gui_set_font_size(12);
+        rg_gui_draw_text_center(SCREEN_W / 2, 280, "A: Install | B: Cancel");
     }
     
     rg_display_drain();
@@ -421,6 +515,11 @@ void app_wifi_handle_input(button_event_t event)
                 current_view = 2;
                 app_otg_start();
                 draw_ui();
+            } else if (selected_option == 2) { // OTA
+                current_view = 3;
+                ota_selected = 0;
+                scan_ota_dir();
+                draw_ui();
             } else {
                 ESP_LOGI(TAG, "Selected %s - Not implemented", options[selected_option]);
             }
@@ -436,6 +535,25 @@ void app_wifi_handle_input(button_event_t event)
             app_otg_stop();
             current_view = 0;
             draw_ui();
+        }
+    } else if (current_view == 3) {
+        if (event == BTN_ESCAPE || event == BTN_B) {
+            current_view = 0;
+            draw_ui();
+        } else if (event == BTN_UP || event == BTN_VOL_DOWN) {
+            if (ota_file_count > 0) {
+                ota_selected--;
+                if (ota_selected < 0) ota_selected = ota_file_count - 1;
+                draw_ui();
+            }
+        } else if (event == BTN_DOWN || event == BTN_VOL_UP) {
+            if (ota_file_count > 0) {
+                ota_selected++;
+                if (ota_selected >= ota_file_count) ota_selected = 0;
+                draw_ui();
+            }
+        } else if (event == BTN_ENTER || event == BTN_A) {
+            trigger_ota();
         }
     }
 }

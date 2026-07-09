@@ -162,7 +162,7 @@ static void draw_ui(void) {
     char buf[64];
 
     // Header
-    rg_gui_draw_text_box(0, 10, 240, 20, 0x0000, "AUDIO FX");
+    rg_gui_draw_text_box(0, 10, 240, 20, 0x0000, "DSP");
 
     // Preset
     snprintf(buf, sizeof(buf), "Preset: [ %s ]", current_preset == 255 ? "CUSTOM" : eq_presets[current_preset].name);

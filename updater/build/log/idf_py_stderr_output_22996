@@ -1,0 +1,115 @@
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 185, in from_csv
+    res.append(PartitionDefinition.from_csv(line, line_no + 1))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 383, in from_csv
+    raise InputError("CSV flag column contains unknown flag '%s'" % (flag))
+gen_esp32part.InputError: CSV flag column contains unknown flag '# Console OS (3 MB)'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 361, in <module>
+    main()
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 330, in main
+    target = ParttoolTarget(**target_args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 95, in __init__
+    partition_table = gen.PartitionTable.from_csv(f.read())
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 187, in from_csv
+    raise InputError('Error at line %d: %s\nPlease check extra_partition_subtypes.inc file in build/config directory' % (line_no + 1, err))
+gen_esp32part.InputError: Error at line 5: CSV flag column contains unknown flag '# Console OS (3 MB)'
+Please check extra_partition_subtypes.inc file in build/config directory
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 185, in from_csv
+    res.append(PartitionDefinition.from_csv(line, line_no + 1))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 383, in from_csv
+    raise InputError("CSV flag column contains unknown flag '%s'" % (flag))
+gen_esp32part.InputError: CSV flag column contains unknown flag '# Console OS (3 MB)'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 361, in <module>
+    main()
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 330, in main
+    target = ParttoolTarget(**target_args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 95, in __init__
+    partition_table = gen.PartitionTable.from_csv(f.read())
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 187, in from_csv
+    raise InputError('Error at line %d: %s\nPlease check extra_partition_subtypes.inc file in build/config directory' % (line_no + 1, err))
+gen_esp32part.InputError: Error at line 5: CSV flag column contains unknown flag '# Console OS (3 MB)'
+Please check extra_partition_subtypes.inc file in build/config directory
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 185, in from_csv
+    res.append(PartitionDefinition.from_csv(line, line_no + 1))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 383, in from_csv
+    raise InputError("CSV flag column contains unknown flag '%s'" % (flag))
+gen_esp32part.InputError: CSV flag column contains unknown flag '# Console OS (3 MB)'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 361, in <module>
+    main()
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 330, in main
+    target = ParttoolTarget(**target_args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 95, in __init__
+    partition_table = gen.PartitionTable.from_csv(f.read())
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 187, in from_csv
+    raise InputError('Error at line %d: %s\nPlease check extra_partition_subtypes.inc file in build/config directory' % (line_no + 1, err))
+gen_esp32part.InputError: Error at line 5: CSV flag column contains unknown flag '# Console OS (3 MB)'
+Please check extra_partition_subtypes.inc file in build/config directory
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 185, in from_csv
+    res.append(PartitionDefinition.from_csv(line, line_no + 1))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 383, in from_csv
+    raise InputError("CSV flag column contains unknown flag '%s'" % (flag))
+gen_esp32part.InputError: CSV flag column contains unknown flag '# Console OS (3 MB)'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 361, in <module>
+    main()
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 330, in main
+    target = ParttoolTarget(**target_args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 95, in __init__
+    partition_table = gen.PartitionTable.from_csv(f.read())
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 187, in from_csv
+    raise InputError('Error at line %d: %s\nPlease check extra_partition_subtypes.inc file in build/config directory' % (line_no + 1, err))
+gen_esp32part.InputError: Error at line 5: CSV flag column contains unknown flag '# Console OS (3 MB)'
+Please check extra_partition_subtypes.inc file in build/config directory
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 185, in from_csv
+    res.append(PartitionDefinition.from_csv(line, line_no + 1))
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 383, in from_csv
+    raise InputError("CSV flag column contains unknown flag '%s'" % (flag))
+gen_esp32part.InputError: CSV flag column contains unknown flag '# Console OS (3 MB)'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 361, in <module>
+    main()
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 330, in main
+    target = ParttoolTarget(**target_args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\parttool.py", line 95, in __init__
+    partition_table = gen.PartitionTable.from_csv(f.read())
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Dell\esp\v5.3.4\esp-idf\components\partition_table\gen_esp32part.py", line 187, in from_csv
+    raise InputError('Error at line %d: %s\nPlease check extra_partition_subtypes.inc file in build/config directory' % (line_no + 1, err))
+gen_esp32part.InputError: Error at line 5: CSV flag column contains unknown flag '# Console OS (3 MB)'
+Please check extra_partition_subtypes.inc file in build/config directory

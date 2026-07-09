@@ -1,0 +1,18 @@
+[1/1022] Generating project_elf_src_esp32s3.c
+[2/1022] Generating C:/Users/Dell/esp/projects/ADF_ES8388_Test2bkp/updater/build/esp-idf/esp_system/ld/memory.ld linker script...
+[3/1022] Generating C:/Users/Dell/esp/projects/ADF_ES8388_Test2bkp/updater/build/esp-idf/esp_system/ld/sections.ld.in linker script...
+[4/1022] Generating ../../partition_table/partition-table.bin
+FAILED: partition_table/partition-table.bin C:/Users/Dell/esp/projects/ADF_ES8388_Test2bkp/updater/build/partition_table/partition-table.bin 
+C:\Windows\system32\cmd.exe /C "cd /D C:\Users\Dell\esp\projects\ADF_ES8388_Test2bkp\updater\build\esp-idf\partition_table && C:\Users\Dell\.espressif\python_env\idf5.3_py3.11_env\Scripts\python.exe C:/Users/Dell/esp/v5.3.4/esp-idf/components/partition_table/gen_esp32part.py -q --offset 0x8000 --flash-size 16MB -- C:/Users/Dell/esp/projects/ADF_ES8388_Test2bkp/partitions.csv C:/Users/Dell/esp/projects/ADF_ES8388_Test2bkp/updater/build/partition_table/partition-table.bin && C:\Users\Dell\.espressif\tools\cmake\3.30.2\bin\cmake.exe -E echo "Partition table binary generated. Contents:" && C:\Users\Dell\.espressif\tools\cmake\3.30.2\bin\cmake.exe -E echo ******************************************************************************* && C:\Users\Dell\.espressif\python_env\idf5.3_py3.11_env\Scripts\python.exe C:/Users/Dell/esp/v5.3.4/esp-idf/components/partition_table/gen_esp32part.py -q --offset 0x8000 --flash-size 16MB -- C:/Users/Dell/esp/projects/ADF_ES8388_Test2bkp/updater/build/partition_table/partition-table.bin && C:\Users\Dell\.espressif\tools\cmake\3.30.2\bin\cmake.exe -E echo *******************************************************************************"
+Error at line 5: CSV flag column contains unknown flag '# Console OS (3 MB)'
+Please check extra_partition_subtypes.inc file in build/config directory
+[5/1022] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/util/ctrl_sock.c.obj
+[6/1022] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_sess.c.obj
+[7/1022] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_uri.c.obj
+[8/1022] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_parse.c.obj
+[9/1022] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_ws.c.obj
+[10/1022] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_txrx.c.obj
+[11/1022] Building C object esp-idf/esp_http_server/CMakeFiles/__idf_esp_http_server.dir/src/httpd_main.c.obj
+[12/1022] Building C object esp-idf/esp_https_ota/CMakeFiles/__idf_esp_https_ota.dir/src/esp_https_ota.c.obj
+[13/1022] Building C object esp-idf/esp_http_client/CMakeFiles/__idf_esp_http_client.dir/esp_http_client.c.obj
+ninja: build stopped: subcommand failed.
