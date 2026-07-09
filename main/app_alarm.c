@@ -68,6 +68,9 @@ static void set_buzzer(bool on) {
         ledc_channel_config(&ledc_channel);
     } else {
         ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+        gpio_reset_pin(GPIO_NUM_48);
+        gpio_set_direction(GPIO_NUM_48, GPIO_MODE_OUTPUT);
+        gpio_set_level(GPIO_NUM_48, 0);
     }
 }
 

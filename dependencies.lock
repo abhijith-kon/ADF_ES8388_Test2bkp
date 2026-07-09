@@ -43,6 +43,20 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.2.0
+  espressif/esp_tinyusb:
+    component_hash: 6a50305bc61c7a361da8c0833642be824e92dacb0a6001719a832a4e96e471bf
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    - name: espressif/tinyusb
+      registry_url: https://components.espressif.com
+      require: public
+      version: '>=0.14.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.6~2
   espressif/esp_websocket_client:
     component_hash: 3fb288702517ef4d75bf933a115f1056ee0c2540d964f9e1d856e0bb67e1dfeb
     dependencies:
@@ -73,6 +87,22 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.68.1
+  espressif/tinyusb:
+    component_hash: a40b7f67df6ac254a4afd96c6401cc56f2059ae747d6d7e66b568bca53ad0edc
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32h4
+    - esp32s31
+    version: 0.19.0~3
   espressif/zlib:
     component_hash: 64ea2fd6754c5a05951f1ddb312ac835cd782e68cb5bd9dfcd1c3a107c8fbfbc
     dependencies:
@@ -91,11 +121,12 @@ direct_dependencies:
 - espressif/dl_fft
 - espressif/esp-dsp
 - espressif/esp_lcd_ili9341
+- espressif/esp_tinyusb
 - espressif/esp_websocket_client
 - espressif/jsmn
 - espressif/nghttp
 - espressif/zlib
 - idf
-manifest_hash: 6526b600768aed971a0c8787f78da8997a73b2c16667f33dfef7b6fc98fb32b0
+manifest_hash: ed5dc43a263236c91c2ca137da71d2e3b070d3dd1bf62e70f1680f36808d43d7
 target: esp32s3
 version: 2.0.0

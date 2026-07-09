@@ -17,4 +17,4 @@ __pycache__/
 import zone/
 imports/
 boot_images/
-*.zip
+*.zipmain/boot_images.h

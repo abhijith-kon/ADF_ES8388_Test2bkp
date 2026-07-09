@@ -5,6 +5,7 @@
 #include "rg_gui.h"
 #include "rg_display.h"
 #include "app_wifi.h"
+#include "app_otg.h"
 
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -352,6 +353,25 @@ static void draw_ui(void)
         rg_gui_draw_text_center(SCREEN_W / 2, 145, wap_status_text);
         
         rg_gui_draw_text_center(SCREEN_W / 2, 280, "Press B/ESC to Stop");
+    } else if (current_view == 2) { // OTG View
+        rg_gui_set_font_size(16);
+        rg_gui_draw_text_center(SCREEN_W / 2, 40, "USB OTG Mode");
+        
+        int progress = app_otg_get_progress();
+        if (progress) {
+            rg_gui_set_font_size(12);
+            rg_gui_draw_text_center(SCREEN_W / 2, 100, "       .---.");
+            rg_gui_draw_text_center(SCREEN_W / 2, 120, "      /   /|");
+            rg_gui_draw_text_center(SCREEN_W / 2, 140, "     .---. |");
+            rg_gui_draw_text_center(SCREEN_W / 2, 160, "     |   | '");
+            rg_gui_draw_text_center(SCREEN_W / 2, 180, "     '---'");
+            rg_gui_set_font_size(16);
+            rg_gui_draw_text_center(SCREEN_W / 2, 220, "CONNECTED");
+        } else {
+            rg_gui_draw_text_center(SCREEN_W / 2, 160, "Waiting for PC...");
+        }
+        
+        rg_gui_draw_text_center(SCREEN_W / 2, 280, "Press B/ESC to Stop");
     }
     
     rg_display_drain();
@@ -374,6 +394,8 @@ void app_wifi_stop(void)
 {
     if (current_view == 1) {
         stop_wap_server();
+    } else if (current_view == 2) {
+        app_otg_stop();
     }
     current_view = 0;
     ESP_LOGI(TAG, "Stopped Download app");
@@ -395,6 +417,10 @@ void app_wifi_handle_input(button_event_t event)
                 current_view = 1;
                 start_wap_server();
                 draw_ui();
+            } else if (selected_option == 1) { // OTG
+                current_view = 2;
+                app_otg_start();
+                draw_ui();
             } else {
                 ESP_LOGI(TAG, "Selected %s - Not implemented", options[selected_option]);
             }
@@ -402,6 +428,12 @@ void app_wifi_handle_input(button_event_t event)
     } else if (current_view == 1) {
         if (event == BTN_ESCAPE || event == BTN_B) {
             stop_wap_server();
+            current_view = 0;
+            draw_ui();
+        }
+    } else if (current_view == 2) {
+        if (event == BTN_ESCAPE || event == BTN_B) {
+            app_otg_stop();
             current_view = 0;
             draw_ui();
         }
@@ -414,5 +446,12 @@ void app_wifi_tick(void)
     if (ui_dirty && current_view == 1) {
         ui_dirty = false;
         draw_ui();
+    } else if (current_view == 2) {
+        static int last_progress = -1;
+        int p = app_otg_get_progress();
+        if (p != last_progress) {
+            last_progress = p;
+            draw_ui();
+        }
     }
 }

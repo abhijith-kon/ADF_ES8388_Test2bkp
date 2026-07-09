@@ -29,6 +29,37 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+esp_periph_set_handle_t g_periph_set = NULL;
+esp_periph_handle_t g_sdcard_handle = NULL;
+
+void system_sdcard_suspend(void) {
+    if (g_sdcard_handle) {
+        esp_periph_stop(g_sdcard_handle);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        esp_periph_remove_from_set(g_periph_set, g_sdcard_handle);
+        esp_periph_destroy(g_sdcard_handle);
+        g_sdcard_handle = NULL;
+    }
+}
+
+void system_sdcard_resume(void) {
+    if (!g_sdcard_handle && g_periph_set) {
+        periph_sdcard_cfg_t sdcard_cfg = {
+            .root = "/sdcard",
+            .card_detect_pin = get_sdcard_intr_gpio(),
+            .mode = SD_MODE_4_LINE,
+        };
+        g_sdcard_handle = periph_sdcard_init(&sdcard_cfg);
+        esp_periph_start(g_periph_set, g_sdcard_handle);
+
+        ESP_LOGI("MAIN", "Waiting for SD card...");
+        int timeout = 50; 
+        while (periph_sdcard_is_mounted(g_sdcard_handle) != true && timeout-- > 0) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+}
+
 static const char *TAG = "MAIN";
 
 int global_volume = 80;
@@ -226,21 +257,9 @@ void app_main(void)
     input_manager_init();
 
     esp_periph_config_t periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
-    esp_periph_set_handle_t set = esp_periph_set_init(&periph_cfg);
+    g_periph_set = esp_periph_set_init(&periph_cfg);
 
-    periph_sdcard_cfg_t sdcard_cfg = {
-        .root = "/sdcard",
-        .card_detect_pin = get_sdcard_intr_gpio(),
-        .mode = SD_MODE_4_LINE,
-    };
-    esp_periph_handle_t sdcard_handle = periph_sdcard_init(&sdcard_cfg);
-    esp_periph_start(set, sdcard_handle);
-
-    ESP_LOGI(TAG, "Waiting for SD card...");
-    int timeout = 50; 
-    while (periph_sdcard_is_mounted(sdcard_handle) != true && timeout-- > 0) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
+    system_sdcard_resume();
     
     // Init apps
     app_files_init();
