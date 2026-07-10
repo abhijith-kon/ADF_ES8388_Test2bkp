@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_random.h"
 #include "nvs_flash.h"
@@ -23,7 +24,7 @@ static int current_brightness = 100;
 void display_backlight_init(void) {
     ledc_timer_config_t ledc_timer = {
         .duty_resolution = LEDC_TIMER_8_BIT,
-        .freq_hz = 5000,
+        .freq_hz = 40000, // Move to 40kHz (inaudible) to prevent audio interference
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .timer_num = LEDC_TIMER_0,
         .clk_cfg = LEDC_AUTO_CLK,
@@ -32,7 +33,7 @@ void display_backlight_init(void) {
 
     ledc_channel_config_t ledc_channel = {
         .channel    = LEDC_CHANNEL_0,
-        .duty       = 255,
+        .duty       = 256, // 256 is 100% for 8-bit timer
         .gpio_num   = DISPLAY_LED_PIN,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .hpoint     = 0,
@@ -45,7 +46,7 @@ void display_backlight_set(int pct) {
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     current_brightness = pct;
-    int duty = (pct * 255) / 100;
+    int duty = (pct * 256) / 100; // 256 is exactly 100% DC
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
@@ -101,6 +102,9 @@ static const char *TAG = "MAIN";
 
 int global_volume = 80;
 static audio_hal_handle_t s_hal = NULL;
+
+uint32_t g_system_boot_count = 0;
+esp_reset_reason_t g_last_reset_reason = ESP_RST_UNKNOWN;
 
 void global_volume_set(int vol) {
     if (vol > 100) vol = 100;
@@ -246,12 +250,25 @@ static void es8388_fix_output_mixer(void) {
 void app_main(void)
 {
     srand(esp_random());
+    display_backlight_init();
+    display_backlight_set(100); // Turn on screen immediately
+
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    g_last_reset_reason = esp_reset_reason();
+    nvs_handle_t nvs_h;
+    if (nvs_open("sys_store", NVS_READWRITE, &nvs_h) == ESP_OK) {
+        nvs_get_u32(nvs_h, "boot_count", &g_system_boot_count);
+        g_system_boot_count++;
+        nvs_set_u32(nvs_h, "boot_count", g_system_boot_count);
+        nvs_commit(nvs_h);
+        nvs_close(nvs_h);
+    }
 
     ESP_LOGI(TAG, "Starting Retro Console OS...");
 
@@ -293,8 +310,6 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show for 1 second
 
     input_manager_init();
-    display_backlight_init();
-    display_backlight_set(100);
 
     esp_periph_config_t periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
     g_periph_set = esp_periph_set_init(&periph_cfg);

@@ -7,8 +7,11 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "driver/temperature_sensor.h"
+#include "esp_system.h"
 
 extern int home_ui_current_battery_pct;
+extern uint32_t g_system_boot_count;
+extern esp_reset_reason_t g_last_reset_reason;
 
 static const char *TAG = "APP_SETTINGS";
 
@@ -78,28 +81,28 @@ static void draw_settings_ui(bool full_refresh)
             rg_gui_set_font_size(8);
             rg_gui_draw_text(4, 4, "SYS.DIAG_V1.0", APP_BG, AMBER);
             
-            // Borders
-            rg_gui_draw_rect(2, 20, 236, 68, AMBER); // CPU Panel
-            rg_gui_draw_rect(2, 92, 116, 100, AMBER); // Mem Panel
-            rg_gui_draw_rect(122, 92, 116, 100, AMBER); // Storage Panel
-            rg_gui_draw_rect(2, 196, 236, 52, AMBER); // Temp Panel
-            rg_gui_draw_rect(2, 252, 236, 62, AMBER); // System Panel
+            // Box Outlines (Neon Green instead of Amber)
+            rg_gui_draw_rect(2, 20, 236, 68, NEON); // CPU Panel
+            rg_gui_draw_rect(2, 92, 116, 76, NEON); // Mem Panel
+            rg_gui_draw_rect(122, 92, 116, 76, NEON); // Storage Panel
+            rg_gui_draw_rect(2, 172, 236, 52, NEON); // Temp Panel
+            rg_gui_draw_rect(2, 228, 236, 68, NEON); // System Panel
             
-            // Corner Accents (Neon Green)
-            rg_gui_draw_rect(2, 20, 6, 2, NEON); rg_gui_draw_rect(2, 20, 2, 6, NEON);
-            rg_gui_draw_rect(232, 20, 6, 2, NEON); rg_gui_draw_rect(236, 20, 2, 6, NEON);
+            // Corner Accents (Amber)
+            rg_gui_draw_rect(2, 20, 6, 2, AMBER); rg_gui_draw_rect(2, 20, 2, 6, AMBER);
+            rg_gui_draw_rect(232, 20, 6, 2, AMBER); rg_gui_draw_rect(236, 20, 2, 6, AMBER);
 
             rg_gui_set_font_size(8);
             
             // --- CPU PANEL ---
-            rg_gui_draw_text(6, 24, ">> CPU CORE", AMBER, APP_BG);
+            rg_gui_draw_text(6, 24, ">> CPU CORE", NEON, APP_BG);
             rg_gui_draw_text(6, 36, "TYPE: ESP32-S3 @240MHz", RG_COLOR_WHITE, APP_BG);
             rg_gui_draw_text(6, 48, "USAGE: 12%", RG_COLOR_WHITE, APP_BG);
             rg_gui_draw_text(110, 48, "LOOP: 4.3ms", RG_COLOR_WHITE, APP_BG);
             rg_gui_draw_text(6, 60, "IDLE: 86%", RG_COLOR_WHITE, APP_BG);
             
             // --- MEMORY PANEL ---
-            rg_gui_draw_text(6, 96, ">> MEMORY", AMBER, APP_BG);
+            rg_gui_draw_text(6, 96, ">> MEMORY", NEON, APP_BG);
             
             multi_heap_info_t info;
             heap_caps_get_info(&info, MALLOC_CAP_SPIRAM);
@@ -117,15 +120,15 @@ static void draw_settings_ui(bool full_refresh)
             rg_gui_draw_text(6, 158, buf, RG_COLOR_WHITE, APP_BG);
             
             // --- STORAGE PANEL ---
-            rg_gui_draw_text(126, 96, ">> STORAGE", AMBER, APP_BG);
+            rg_gui_draw_text(126, 96, ">> STORAGE", NEON, APP_BG);
             rg_gui_draw_text(126, 110, "FLASH: 3.2/16MB", RG_COLOR_WHITE, APP_BG);
             rg_gui_draw_text(126, 122, "SD_CARD: OK", RG_COLOR_WHITE, APP_BG);
             rg_gui_draw_text(126, 134, "SD_FREE: 14.8GB", RG_COLOR_WHITE, APP_BG);
             rg_gui_draw_rect(126, 150, 108, 6, RG_COLOR_RGB(50,50,50));
-            rg_gui_draw_rect(126, 150, 40, 6, NEON); // Fake progress bar
+            rg_gui_draw_rect(126, 150, 40, 6, AMBER); // Fake progress bar
             
             // --- TEMP PANEL ---
-            rg_gui_draw_text(6, 200, ">> TEMPERATURE", AMBER, APP_BG);
+            rg_gui_draw_text(6, 176, ">> TEMPERATURE", NEON, APP_BG);
             
             temperature_sensor_handle_t temp_sensor = NULL;
             temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 50);
@@ -136,25 +139,40 @@ static void draw_settings_ui(bool full_refresh)
                 temperature_sensor_disable(temp_sensor);
                 temperature_sensor_uninstall(temp_sensor);
             }
-            snprintf(buf, sizeof(buf), "CORE: %.1fC", tsens_value);
-            rg_gui_draw_text(6, 214, buf, RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_text(90, 214, "AMB: 27.5C", RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_text(170, 214, "RTC: 28.0C", RG_COLOR_WHITE, APP_BG);
+            snprintf(buf, sizeof(buf), "CORE_TEMP: %.1fC", tsens_value);
+            rg_gui_draw_text(6, 190, buf, RG_COLOR_WHITE, APP_BG);
+            rg_gui_draw_text(126, 190, "AMBIENT: 27.5C", RG_COLOR_WHITE, APP_BG);
+            rg_gui_draw_text(6, 204, "RTC_TEMP: 28.0C", RG_COLOR_WHITE, APP_BG);
             
             // --- SYSTEM PANEL ---
-            rg_gui_draw_text(6, 256, ">> SYSTEM", AMBER, APP_BG);
+            rg_gui_draw_text(6, 232, ">> SYSTEM", NEON, APP_BG);
             snprintf(buf, sizeof(buf), "BATTERY: %d%%", home_ui_current_battery_pct);
-            rg_gui_draw_text(6, 270, buf, RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_text(110, 270, "RTC: OK(DS3231)", RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_text(6, 294, "BOOTS: 42", RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_text(110, 294, "RST: SW_RESET", RG_COLOR_WHITE, APP_BG);
+            rg_gui_draw_text(6, 246, buf, RG_COLOR_WHITE, APP_BG);
+            rg_gui_draw_text(126, 246, "RTC: DS3231", RG_COLOR_WHITE, APP_BG);
+            
+            snprintf(buf, sizeof(buf), "BOOT_COUNT: %lu", g_system_boot_count);
+            rg_gui_draw_text(6, 258, buf, RG_COLOR_WHITE, APP_BG);
+            
+            const char* rst_str = "UNKNOWN";
+            switch(g_last_reset_reason) {
+                case ESP_RST_POWERON: rst_str = "POWER_ON"; break;
+                case ESP_RST_SW: rst_str = "SW_RESET"; break;
+                case ESP_RST_PANIC: rst_str = "PANIC"; break;
+                case ESP_RST_INT_WDT: rst_str = "INT_WDT"; break;
+                case ESP_RST_TASK_WDT: rst_str = "TASK_WDT"; break;
+                case ESP_RST_DEEPSLEEP: rst_str = "DEEPSLEEP"; break;
+                default: break;
+            }
+            snprintf(buf, sizeof(buf), "RST: %s", rst_str);
+            rg_gui_draw_text(126, 258, buf, RG_COLOR_WHITE, APP_BG);
+            rg_gui_draw_text(6, 282, "WDT: OK", RG_COLOR_WHITE, APP_BG);
         }
         
         // --- UPTIME DYNAMIC UPDATE ---
         rg_gui_set_font_size(8);
         uint32_t uptime_s = esp_timer_get_time() / 1000000;
-        snprintf(buf, sizeof(buf), "UPTIME: %lum %lus    ", uptime_s / 60, uptime_s % 60);
-        rg_gui_draw_text(6, 282, buf, NEON, APP_BG);
+        snprintf(buf, sizeof(buf), "UPTIME: %02lu:%02lu:%02lu  ", uptime_s / 3600, (uptime_s % 3600) / 60, uptime_s % 60);
+        rg_gui_draw_text(126, 282, buf, AMBER, APP_BG);
         
         // Top status dynamic elements
         snprintf(buf, sizeof(buf), "BAT: %d%%  SD: OK", home_ui_current_battery_pct);

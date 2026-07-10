@@ -236,22 +236,18 @@ bool game_pong_input(button_event_t event) {
         paddle_x -= 14;
         if (paddle_x < 0) paddle_x = 0;
         if (!ball_launched) ball_x = paddle_x + (PADDLE_W / 2) - (BALL_SIZE / 2);
-        render_game();
     } else if (event == BTN_RIGHT) {
         paddle_x += 14;
         if (paddle_x > CANV_W - PADDLE_W) paddle_x = CANV_W - PADDLE_W;
         if (!ball_launched) ball_x = paddle_x + (PADDLE_W / 2) - (BALL_SIZE / 2);
-        render_game();
     } else if (event == BTN_VOL_DOWN) { // CCW
-        paddle_x -= 8;
+        paddle_x -= 12;
         if (paddle_x < 0) paddle_x = 0;
         if (!ball_launched) ball_x = paddle_x + (PADDLE_W / 2) - (BALL_SIZE / 2);
-        render_game();
     } else if (event == BTN_VOL_UP) { // CW
-        paddle_x += 8;
+        paddle_x += 12;
         if (paddle_x > CANV_W - PADDLE_W) paddle_x = CANV_W - PADDLE_W;
         if (!ball_launched) ball_x = paddle_x + (PADDLE_W / 2) - (BALL_SIZE / 2);
-        render_game();
     }
     return false;
 }
