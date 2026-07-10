@@ -123,9 +123,19 @@ button_event_t input_manager_get_event(void)
 
     // --- KY-040 Rotary Encoder ---
     int clk = gpio_get_level(ENC_CLK_PIN);
+    int dt = gpio_get_level(ENC_DT_PIN);
+    static int64_t last_enc_time = 0;
+    int64_t now_us = esp_timer_get_time();
+    
     if (clk != last_clk && clk == 0) {
-        if (gpio_get_level(ENC_DT_PIN) != clk) encoder_pos++;
-        else encoder_pos--;
+        if ((now_us - last_enc_time) > 20000) { // 20ms debounce
+            if (dt == 1) {
+                encoder_pos++;
+            } else {
+                encoder_pos--;
+            }
+            last_enc_time = now_us;
+        }
     }
     last_clk = clk;
 
