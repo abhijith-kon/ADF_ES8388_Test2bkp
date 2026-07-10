@@ -14,6 +14,61 @@ extern uint32_t g_system_boot_count;
 extern esp_reset_reason_t g_last_reset_reason;
 extern char g_sys_error_str[32];
 
+#include "led_strip.h"
+
+static led_strip_handle_t led_strip;
+static bool neo_initialized = false;
+static bool neo_on = false;
+static int neo_hue = 0; // 0-359
+static int neo_brightness = 50; // 0-100
+static int neo_menu_idx = 0; // 0=Hue, 1=Bright, 2=State
+
+static void neo_init() {
+    if (neo_initialized) return;
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = 48,
+        .max_leds = 1,
+    };
+    led_strip_rmt_config_t rmt_config = {
+        .resolution_hz = 10 * 1000 * 1000, 
+    };
+    if (led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip) == ESP_OK) {
+        led_strip_clear(led_strip);
+        neo_initialized = true;
+    }
+}
+
+static void neo_update() {
+    if (!neo_initialized) return;
+    if (neo_on) {
+        led_strip_set_pixel_hsv(led_strip, 0, neo_hue, 255, (neo_brightness * 255) / 100);
+        led_strip_refresh(led_strip);
+    } else {
+        led_strip_clear(led_strip);
+    }
+}
+
+static uint16_t hsv2rgb565(int h, int s, int v) {
+    if (s == 0) return RG_COLOR_RGB(v, v, v);
+    int region = h / 60;
+    int remainder = (h - (region * 60)) * 6; 
+    
+    int p = (v * (255 - s)) >> 8;
+    int q = (v * (255 - ((s * remainder) >> 8))) >> 8;
+    int t = (v * (255 - ((s * (255 - remainder)) >> 8))) >> 8;
+    
+    uint8_t r=0, g=0, b=0;
+    switch (region) {
+        case 0: r = v; g = t; b = p; break;
+        case 1: r = q; g = v; b = p; break;
+        case 2: r = p; g = v; b = t; break;
+        case 3: r = p; g = q; b = v; break;
+        case 4: r = t; g = p; b = v; break;
+        default: r = v; g = p; b = q; break;
+    }
+    return RG_COLOR_RGB(r, g, b);
+}
+
 static const char *TAG = "APP_SETTINGS";
 
 static void draw_rect_outline(int x, int y, int w, int h, uint16_t color) {
@@ -126,13 +181,6 @@ static void draw_settings_ui(bool full_refresh)
             rg_gui_draw_text(126, 94, "FLSH:3.2/16M", RG_COLOR_WHITE, APP_BG);
             rg_gui_draw_text(126, 106, "SDFREE:14.8G", RG_COLOR_WHITE, APP_BG);
             
-            snprintf(buf, sizeof(buf), "ERR:%s", g_sys_error_str);
-            if (strcmp(g_sys_error_str, "NONE") == 0) {
-                rg_gui_draw_text(126, 118, buf, RG_COLOR_WHITE, APP_BG);
-            } else {
-                rg_gui_draw_text(126, 118, buf, RG_COLOR_RGB(255, 30, 30), APP_BG);
-            }
-            
             // --- TEMP PANEL ---
             rg_gui_draw_text(6, 144, ">> TEMPERATURE", NEON, APP_BG);
             
@@ -175,9 +223,54 @@ static void draw_settings_ui(bool full_refresh)
         snprintf(buf, sizeof(buf), "UPTIME: %02lu:%02lu:%02lu  ", uptime_s / 3600, (uptime_s % 3600) / 60, uptime_s % 60);
         rg_gui_draw_text(6, 244, buf, AMBER, APP_BG);
         
+        // --- GLOBAL ERROR ROW ---
+        snprintf(buf, sizeof(buf), "SYS_ERR: %s", g_sys_error_str);
+        if (strcmp(g_sys_error_str, "NONE") == 0) {
+            rg_gui_draw_text(6, 260, buf, RG_COLOR_WHITE, APP_BG);
+        } else {
+            rg_gui_draw_text(6, 260, buf, RG_COLOR_RGB(255, 50, 50), APP_BG);
+        }
+        
         // Top status dynamic elements
         snprintf(buf, sizeof(buf), "BAT:%d%% SD:OK", home_ui_current_battery_pct);
         rg_gui_draw_text(110, 4, buf, APP_BG, AMBER);
+    } else if (current_view == 2) { // Neopixel UI
+        uint16_t NEON = RG_COLOR_RGB(57, 255, 20);
+        uint16_t AMBER = RG_COLOR_RGB(255, 170, 0);
+        
+        if (full_refresh) {
+            rg_gui_clear(APP_BG);
+            rg_gui_draw_rect(0, 0, SCREEN_W, 16, NEON);
+            rg_gui_set_font_size(8);
+            rg_gui_draw_text(4, 4, "NEOPIXEL_CTRL", APP_BG, NEON);
+            
+            draw_rect_outline(2, 20, 236, 180, NEON);
+            
+            // Hue Bar (0 to 359)
+            rg_gui_draw_text(10, 30, (neo_menu_idx == 0) ? ">> HUE" : "   HUE", (neo_menu_idx == 0) ? AMBER : RG_COLOR_WHITE, APP_BG);
+            for (int i=0; i<180; i++) {
+                rg_gui_draw_rect(30 + i, 46, 1, 20, hsv2rgb565(i * 2, 255, 255));
+            }
+            rg_gui_draw_rect(30 + (neo_hue / 2) - 1, 42, 3, 28, RG_COLOR_WHITE); // cursor
+            
+            // Brightness Bar (0 to 100)
+            rg_gui_draw_text(10, 80, (neo_menu_idx == 1) ? ">> BRIGHTNESS" : "   BRIGHTNESS", (neo_menu_idx == 1) ? AMBER : RG_COLOR_WHITE, APP_BG);
+            for (int i=0; i<180; i++) {
+                rg_gui_draw_rect(30 + i, 96, 1, 20, hsv2rgb565(neo_hue, 255, (i * 255) / 180));
+            }
+            rg_gui_draw_rect(30 + (neo_brightness * 180 / 100) - 1, 92, 3, 28, RG_COLOR_WHITE); // cursor
+            
+            // Toggle
+            rg_gui_draw_text(10, 140, (neo_menu_idx == 2) ? ">> STATE" : "   STATE", (neo_menu_idx == 2) ? AMBER : RG_COLOR_WHITE, APP_BG);
+            
+            if (neo_on) {
+                rg_gui_draw_rect(70, 136, 60, 16, NEON);
+                rg_gui_draw_text(84, 140, "ON", APP_BG, NEON);
+            } else {
+                rg_gui_draw_rect(70, 136, 60, 16, RG_COLOR_RED);
+                rg_gui_draw_text(80, 140, "OFF", APP_BG, RG_COLOR_RED);
+            }
+        }
     }
 
     rg_display_drain();
@@ -218,7 +311,11 @@ void app_settings_handle_input(button_event_t event)
             draw_settings_ui(false);
         } else if (event == BTN_ENTER || event == BTN_A) {
             ESP_LOGI(TAG, "Selected %s", settings_menu[selected_setting]);
-            if (selected_setting == 1) { // System Status
+            if (selected_setting == 0) { // Neopixel
+                neo_init();
+                current_view = 2;
+                draw_settings_ui(true);
+            } else if (selected_setting == 1) { // System Status
                 current_view = 1;
                 draw_settings_ui(true);
             }
@@ -226,6 +323,38 @@ void app_settings_handle_input(button_event_t event)
     } else if (current_view == 1) { // System Status view
         if (event == BTN_ESCAPE || event == BTN_B) {
             current_view = 0;
+            draw_settings_ui(true);
+        }
+    } else if (current_view == 2) { // Neopixel view
+        if (event == BTN_ESCAPE || event == BTN_B) {
+            current_view = 0;
+            draw_settings_ui(true);
+            return;
+        }
+        
+        bool changed = false;
+        if (event == BTN_UP) {
+            neo_menu_idx--;
+            if (neo_menu_idx < 0) neo_menu_idx = 2;
+            changed = true;
+        } else if (event == BTN_DOWN) {
+            neo_menu_idx++;
+            if (neo_menu_idx > 2) neo_menu_idx = 0;
+            changed = true;
+        } else if (event == BTN_LEFT || event == BTN_VOL_DOWN) {
+            if (neo_menu_idx == 0) { neo_hue -= 10; if (neo_hue < 0) neo_hue += 360; }
+            else if (neo_menu_idx == 1) { neo_brightness -= 5; if (neo_brightness < 0) neo_brightness = 0; }
+            else if (neo_menu_idx == 2) { neo_on = !neo_on; }
+            changed = true;
+        } else if (event == BTN_RIGHT || event == BTN_VOL_UP || event == BTN_A || event == BTN_ENTER) {
+            if (neo_menu_idx == 0) { neo_hue += 10; if (neo_hue > 359) neo_hue -= 360; }
+            else if (neo_menu_idx == 1) { neo_brightness += 5; if (neo_brightness > 100) neo_brightness = 100; }
+            else if (neo_menu_idx == 2) { neo_on = !neo_on; }
+            changed = true;
+        }
+        
+        if (changed) {
+            neo_update();
             draw_settings_ui(true);
         }
     }
