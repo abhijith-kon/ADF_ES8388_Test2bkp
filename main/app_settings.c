@@ -68,6 +68,7 @@ static void draw_settings_ui(bool full_refresh)
     } else if (current_view == 1) { // Sci-Fi System Status
         uint16_t AMBER = RG_COLOR_RGB(255, 170, 0);
         uint16_t NEON = RG_COLOR_RGB(57, 255, 20);
+        char buf[64];
         
         if (full_refresh) {
             rg_gui_clear(APP_BG);
