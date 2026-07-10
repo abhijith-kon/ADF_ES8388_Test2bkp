@@ -267,8 +267,8 @@ static void draw_settings_ui(bool full_refresh)
                 rg_gui_draw_rect(70, 136, 60, 16, NEON);
                 rg_gui_draw_text(84, 140, "ON", APP_BG, NEON);
             } else {
-                rg_gui_draw_rect(70, 136, 60, 16, RG_COLOR_RED);
-                rg_gui_draw_text(80, 140, "OFF", APP_BG, RG_COLOR_RED);
+                rg_gui_draw_rect(70, 136, 60, 16, RG_COLOR_RGB(255, 0, 0));
+                rg_gui_draw_text(80, 140, "OFF", APP_BG, RG_COLOR_RGB(255, 0, 0));
             }
         }
     }
