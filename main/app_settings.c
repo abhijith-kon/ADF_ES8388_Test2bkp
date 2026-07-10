@@ -173,7 +173,7 @@ static void draw_settings_ui(bool full_refresh)
         rg_gui_set_font_size(8);
         uint32_t uptime_s = esp_timer_get_time() / 1000000;
         snprintf(buf, sizeof(buf), "UPTIME: %02lu:%02lu:%02lu  ", uptime_s / 3600, (uptime_s % 3600) / 60, uptime_s % 60);
-        rg_gui_draw_text(126, 250, buf, AMBER, APP_BG);
+        rg_gui_draw_text(6, 244, buf, AMBER, APP_BG);
         
         // Top status dynamic elements
         snprintf(buf, sizeof(buf), "BAT:%d%% SD:OK", home_ui_current_battery_pct);
