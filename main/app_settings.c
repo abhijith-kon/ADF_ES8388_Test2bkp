@@ -32,7 +32,7 @@ static uint16_t *neo_wheel_buf = NULL;
 static void neo_init() {
     if (neo_initialized) return;
     led_strip_config_t strip_config = {
-        .strip_gpio_num = 48,
+        .strip_gpio_num = 47, // Changed from 48 (which is the buzzer)
         .max_leds = 1,
     };
     led_strip_rmt_config_t rmt_config = {
@@ -402,29 +402,29 @@ void app_settings_handle_input(button_event_t event)
             neo_menu_idx++;
             if (neo_menu_idx > 2) neo_menu_idx = 0;
             changed = true;
-        } else {
+        } else if (event != BTN_NONE) {
             if (neo_menu_idx == 0) { // Wheel
-                if (event == BTN_UP) neo_cy -= 5;
-                else if (event == BTN_DOWN) neo_cy += 5;
-                else if (event == BTN_LEFT || event == BTN_VOL_DOWN) neo_cx -= 5;
-                else if (event == BTN_RIGHT || event == BTN_VOL_UP) neo_cx += 5;
+                if (event == BTN_UP) { neo_cy -= 5; changed = true; }
+                else if (event == BTN_DOWN) { neo_cy += 5; changed = true; }
+                else if (event == BTN_LEFT || event == BTN_VOL_DOWN) { neo_cx -= 5; changed = true; }
+                else if (event == BTN_RIGHT || event == BTN_VOL_UP) { neo_cx += 5; changed = true; }
                 
-                // Constrain to circle of radius 60
-                float dist = sqrt(neo_cx*neo_cx + neo_cy*neo_cy);
-                if (dist > 60.0f) {
-                    neo_cx = (int)((neo_cx / dist) * 60.0f);
-                    neo_cy = (int)((neo_cy / dist) * 60.0f);
+                if (changed) {
+                    // Constrain to circle of radius 60
+                    float dist = sqrt(neo_cx*neo_cx + neo_cy*neo_cy);
+                    if (dist > 60.0f) {
+                        neo_cx = (int)((neo_cx / dist) * 60.0f);
+                        neo_cy = (int)((neo_cy / dist) * 60.0f);
+                    }
                 }
-                changed = true;
             } else if (neo_menu_idx == 1) { // Brightness
-                if (event == BTN_LEFT || event == BTN_VOL_DOWN) { neo_brightness -= 5; if (neo_brightness < 0) neo_brightness = 0; }
-                else if (event == BTN_RIGHT || event == BTN_VOL_UP) { neo_brightness += 5; if (neo_brightness > 100) neo_brightness = 100; }
-                changed = true;
+                if (event == BTN_LEFT || event == BTN_VOL_DOWN) { neo_brightness -= 5; if (neo_brightness < 0) neo_brightness = 0; changed = true; }
+                else if (event == BTN_RIGHT || event == BTN_VOL_UP) { neo_brightness += 5; if (neo_brightness > 100) neo_brightness = 100; changed = true; }
             } else if (neo_menu_idx == 2) { // Toggle
                 if (event == BTN_LEFT || event == BTN_RIGHT || event == BTN_UP || event == BTN_DOWN || event == BTN_VOL_DOWN || event == BTN_VOL_UP) { 
                     neo_on = !neo_on; 
+                    changed = true;
                 }
-                changed = true;
             }
         }
         
