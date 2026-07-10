@@ -415,6 +415,7 @@ static void draw_ui(void)
         
         rg_gui_draw_text_center(SCREEN_W / 2, 145, wap_status_text);
         
+        rg_gui_set_font_size(8);
         rg_gui_draw_text_center(SCREEN_W / 2, 280, "Press B/ESC to Stop");
     } else if (current_view == 2) { // OTG View
         rg_gui_set_font_size(16);
@@ -423,17 +424,18 @@ static void draw_ui(void)
         int progress = app_otg_get_progress();
         if (progress) {
             rg_gui_set_font_size(12);
-            rg_gui_draw_text_center(SCREEN_W / 2, 100, "       .---.");
-            rg_gui_draw_text_center(SCREEN_W / 2, 120, "      /   /|");
-            rg_gui_draw_text_center(SCREEN_W / 2, 140, "     .---. |");
-            rg_gui_draw_text_center(SCREEN_W / 2, 160, "     |   | '");
-            rg_gui_draw_text_center(SCREEN_W / 2, 180, "     '---'");
+            rg_gui_draw_text_center(SCREEN_W / 2, 100, "   .----.   ");
+            rg_gui_draw_text_center(SCREEN_W / 2, 120, "   |    |   ");
+            rg_gui_draw_text_center(SCREEN_W / 2, 140, "  _|____|_  ");
+            rg_gui_draw_text_center(SCREEN_W / 2, 160, " |  _  _  | ");
+            rg_gui_draw_text_center(SCREEN_W / 2, 180, " | | || | | ");
+            rg_gui_draw_text_center(SCREEN_W / 2, 200, " '--------' ");
             rg_gui_set_font_size(16);
             rg_gui_draw_text_center(SCREEN_W / 2, 220, "CONNECTED");
         } else {
             rg_gui_draw_text_center(SCREEN_W / 2, 160, "Waiting for PC...");
         }
-        
+        rg_gui_set_font_size(8);
         rg_gui_draw_text_center(SCREEN_W / 2, 280, "Press B/ESC to Stop");
     } else if (current_view == 3) { // OTA View
         rg_gui_set_font_size(16);

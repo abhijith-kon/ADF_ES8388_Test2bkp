@@ -5,6 +5,15 @@
 #include <time.h>
 #include <stdio.h>
 #include "esp_timer.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+
+static adc_oneshot_unit_handle_t adc1_handle = NULL;
+static adc_cali_handle_t cali_handle = NULL;
+int home_ui_current_battery_pct = -1;
+static float filtered_vbat = -1.0f;
+static uint32_t last_adc_time = 0;
 
 #define HOME_W          240 // Portrait
 #define HOME_H          320
@@ -70,7 +79,61 @@ typedef struct {
 
 static home_ui_t home_ui;
 
-// clampi removed
+static int get_battery_percentage(float voltage_mv) {
+    if (voltage_mv >= 4200) return 100;
+    if (voltage_mv >= 4100) return 90 + (voltage_mv - 4100) / 10.0f;
+    if (voltage_mv >= 4000) return 80 + (voltage_mv - 4000) / 10.0f;
+    if (voltage_mv >= 3900) return 60 + (voltage_mv - 3900) * 20.0f / 100.0f;
+    if (voltage_mv >= 3800) return 40 + (voltage_mv - 3800) * 20.0f / 100.0f;
+    if (voltage_mv >= 3700) return 20 + (voltage_mv - 3700) * 20.0f / 100.0f;
+    if (voltage_mv >= 3600) return 5 + (voltage_mv - 3600) * 15.0f / 100.0f;
+    if (voltage_mv >= 3300) return (voltage_mv - 3300) * 5.0f / 300.0f;
+    return 0;
+}
+
+static void home_ui_update_battery(void) {
+    if (!adc1_handle) return;
+    int raw = 0;
+    int total_raw = 0;
+    int num_samples = 32;
+    int valid_samples = 0;
+    
+    for (int i = 0; i < num_samples; i++) {
+        if (adc_oneshot_read(adc1_handle, ADC_CHANNEL_7, &raw) == ESP_OK) {
+            total_raw += raw;
+            valid_samples++;
+        }
+    }
+    
+    if (valid_samples > 0) {
+        raw = total_raw / valid_samples;
+        
+        int voltage_mv = 0;
+        if (cali_handle) {
+            adc_cali_raw_to_voltage(cali_handle, raw, &voltage_mv);
+        } else {
+            voltage_mv = (raw * 3100) / 4095;
+        }
+        
+        // V_pin = V_bat / 2
+        float vbat_mv = voltage_mv * 2.0f;
+        
+        if (filtered_vbat < 0.0f) {
+            filtered_vbat = vbat_mv;
+        } else {
+            filtered_vbat = filtered_vbat * 0.9f + vbat_mv * 0.1f;
+        }
+        
+        int pct = get_battery_percentage(filtered_vbat);
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        
+        if (pct != home_ui_current_battery_pct) {
+            home_ui_current_battery_pct = pct;
+            home_ui.need_time_refresh = true; // Redraw battery along with time
+        }
+    }
+}
 
 static void home_ui_update_clock(void) {
     time_t now;
@@ -103,6 +166,32 @@ void home_ui_init(void) {
     snprintf(home_ui.app_text, sizeof(home_ui.app_text), "%s", home_apps[0].name);
     home_ui.need_app_text_refresh = true;
     home_ui.needs_redraw = true;
+
+    // Init ADC for battery on GPIO8 (ADC1_CH7)
+    if (!adc1_handle) {
+        adc_oneshot_unit_init_cfg_t init_config1 = {
+            .unit_id = ADC_UNIT_1,
+        };
+        if (adc_oneshot_new_unit(&init_config1, &adc1_handle) == ESP_OK) {
+            adc_oneshot_chan_cfg_t config = {
+                .bitwidth = ADC_BITWIDTH_DEFAULT,
+                .atten = ADC_ATTEN_DB_12,
+            };
+            adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_7, &config);
+            
+            adc_cali_curve_fitting_config_t cali_config = {
+                .unit_id = ADC_UNIT_1,
+                .chan = ADC_CHANNEL_7,
+                .atten = ADC_ATTEN_DB_12,
+                .bitwidth = ADC_BITWIDTH_DEFAULT,
+            };
+            if (adc_cali_create_scheme_curve_fitting(&cali_config, &cali_handle) != ESP_OK) {
+                printf("Failed to init ADC calibration scheme\n");
+            }
+
+            home_ui_update_battery();
+        }
+    }
 }
 
 void home_ui_set_selected(uint8_t idx) {
@@ -152,6 +241,12 @@ void home_ui_tick(void) {
     if (tinfo && tinfo->tm_min != last_min) {
         home_ui.need_time_refresh = true;
         last_min = tinfo->tm_min;
+    }
+
+    uint32_t now_ms = esp_timer_get_time() / 1000;
+    if (now_ms - last_adc_time > 1000) { // Check every 1 second
+        last_adc_time = now_ms;
+        home_ui_update_battery();
     }
 }
 
@@ -308,6 +403,27 @@ void home_ui_draw(void) {
         rg_gui_set_text_color(RG_COLOR_RGB(0xAA, 0xAA, 0xAA));
         rg_gui_draw_text_box(DATE_BOX_X, DATE_BOX_Y, DATE_BOX_W, DATE_BOX_H,
                              RG_COLOR_BLACK, home_ui.date_text);
+                             
+        if (home_ui_current_battery_pct >= 0) {
+            int bx = 210;
+            int by = TIME_BOX_Y - 15;
+            int bw = 20;
+            int bh = 10;
+            
+            rg_gui_draw_rect(bx, by, bw, bh, RG_COLOR_RGB(150, 150, 150)); // Battery body
+            rg_gui_draw_rect(bx + bw, by + 2, 2, 6, RG_COLOR_RGB(150, 150, 150)); // Terminal
+            rg_gui_draw_rect(bx + 1, by + 1, bw - 2, bh - 2, RG_COLOR_BLACK); // Inner bg
+            
+            int level_w = ((bw - 2) * home_ui_current_battery_pct) / 100;
+            if (level_w > 0) {
+                uint16_t color = RG_COLOR_RGB(0, 255, 0); // Green
+                if (home_ui_current_battery_pct <= 20) color = RG_COLOR_RGB(255, 0, 0); // Red
+                else if (home_ui_current_battery_pct <= 50) color = RG_COLOR_RGB(255, 255, 0); // Yellow
+                
+                rg_gui_draw_rect(bx + 1, by + 1, level_w, bh - 2, color);
+            }
+        }
+        
         home_ui.need_time_refresh = false;
     }
 

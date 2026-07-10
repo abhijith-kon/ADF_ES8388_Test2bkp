@@ -23,6 +23,7 @@
 #include "ui.h" // Retro-OS games launcher
 #include "app_audio_fx.h"
 #include "app_wifi.h"
+#include "app_settings.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "es8388.h"
@@ -80,7 +81,8 @@ typedef enum {
     APP_GAMES,
     APP_RADIO,
     APP_AUDIO_FX,
-    APP_WIFI
+    APP_WIFI,
+    APP_SETTINGS
 } app_state_t;
 
 static app_state_t current_app = APP_HOME;
@@ -267,6 +269,7 @@ void app_main(void)
     app_alarm_init();
     app_audio_fx_init();
     app_wifi_init();
+    app_settings_init();
     home_ui_init();
 
     ESP_LOGI(TAG, "System ready. Entering HOME.");
@@ -309,6 +312,10 @@ void app_main(void)
                 else if (selected == 4) { // APP_AUDIO_FX
                     current_app = APP_AUDIO_FX;
                     app_audio_fx_start();
+                }
+                else if (selected == 5) { // APP_SETTINGS (formerly APP_VOL)
+                    current_app = APP_SETTINGS;
+                    app_settings_start();
                 }
                 else if (selected == 6) { // APP_ALARM
                     current_app = APP_ALARM;
@@ -398,6 +405,17 @@ void app_main(void)
                 app_audio_fx_handle_input(event);
             }
         }
+        else if (current_app == APP_SETTINGS) {
+            if (event == BTN_ESCAPE) {
+                app_settings_stop();
+                current_app = APP_HOME;
+                rg_display_drain();
+                rg_gui_clear(0x0000);
+                home_ui_force_redraw();
+            } else {
+                app_settings_handle_input(event);
+            }
+        }
 
         // --- RENDER LOOP & TICK ---
         if (current_app == APP_HOME) {
@@ -425,6 +443,9 @@ void app_main(void)
         }
         else if (current_app == APP_AUDIO_FX) {
             app_audio_fx_tick();
+        }
+        else if (current_app == APP_SETTINGS) {
+            app_settings_tick();
         }
 
         app_alarm_tick(); // Check and ring alarm across all apps

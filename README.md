@@ -590,3 +590,5 @@ Both firmware environments share the same SD card. ROMs, cover art, BIOS files, 
 - **RSVP File Browser Partial Redraws**: Upgraded the .txt file list UI to use optimized partial redraws, eliminating full-screen flickering during file navigation.
 - **Retro-Go ESP-IDF v5 Compatibility Fix**: Identified and mitigated a strict GPIO validation panic (assert failed in LEDC and I2S initialization) in ESP-IDF v5 caused by hardcoding LCD backlight and audio amplifier enable pins to -1. Correctly omitting these unassigned pins allows all Retro-Go emulator cores to boot successfully without buzzer static or crash loops.
 
+
+## Console v6 Updates: Added System Status graph, improved OTA UI, Battery % Icon, Codec optimizations
