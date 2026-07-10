@@ -46,7 +46,7 @@ void display_backlight_set(int pct) {
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     current_brightness = pct;
-    int duty = (pct * 256) / 100; // 256 is exactly 100% DC
+    int duty = (pct * 255) / 100; // 255 is 100% for 8-bit timer
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
@@ -322,8 +322,11 @@ void app_main(void)
 
     ESP_LOGI(TAG, "System ready. Entering HOME.");
     
-    static int64_t last_input_time = 0;
+    int64_t last_input_time = esp_timer_get_time();
     static bool display_is_dimmed = false;
+    
+    display_backlight_init();
+    display_backlight_set(100);
 
     while (1) {
         button_event_t event = input_manager_get_event();
