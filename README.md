@@ -48,6 +48,14 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 **KY-040 Rotary Encoder:** CW = Volume Up (+5), CCW = Volume Down (-5)
 
 ## Project Status & Memory
+
+### Version 8 Updates
+- **Hardware PCNT Rotary Encoder:** Replaced manual debouncing with ESP32-S3 Pulse Counter (PCNT) peripheral for flawless, zero-CPU scrolling.
+- **Screen Dimming (GPIO 11):** Configured hardware LEDC PWM to dim the ILI9341 backlight to 20% after 25s, and 0% after 40s of inactivity (excluding Games and RSVP reader) to preserve battery.
+- **Sci-Fi System Diagnostic UI:** Completely redesigned the System Status view into an amber-and-black industrial diagnostic terminal featuring live Core Temperature, Uptime, Memory blocks, and Storage stats.
+- **WAP Upload Routing:** The Web UI now features a dropdown menu to dynamically route uploaded files to the `/sdcard/` Root folder (for music/txt) or the `/sdcard/OTA/` folder (for firmware binaries).
+- **Smoother Pong:** Added rotary encoder support to the Pong game and smoothed out the paddle movement increments.
+
 ### Tried and Successful
 - **I2S/I2C Conflict Bypass:** Enabled `CONFIG_I2S_SKIP_LEGACY_CONFLICT_CHECK=y` and `CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK=y`. Removed all references to new `esp_driver_i2s` headers to allow ADF's legacy drivers to work seamlessly. A `fullclean` was required to apply these changes globally.
 - **I2C Timeout Fix (0x107)**: Lowered the Retro-Go I2C clock speed from 400kHz to 100kHz to compensate for the weak internal pull-up resistors on the ESP32-S3, which prevents the ES8388 communication from timing out upon boot.

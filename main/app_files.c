@@ -636,9 +636,12 @@ void app_files_stop(void)
     app_mode = 0;
 }
 
-bool app_files_is_in_page_view(void)
-{
-    return (app_mode == 1 || app_mode == 2 || app_mode == 3);
+bool app_files_is_in_page_view(void) {
+    return (app_mode == 1 || app_mode == 2);
+}
+
+bool app_files_is_in_rsvp_mode(void) {
+    return (app_mode == 2);
 }
 
 void app_files_handle_input(button_event_t event)

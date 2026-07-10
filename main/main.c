@@ -13,6 +13,41 @@
 #include "es8388.h"
 #include "rg_display.h"
 #include "rg_gui.h"
+#include "driver/ledc.h"
+
+// Backlight config
+#define DISPLAY_LED_PIN 11
+static int current_brightness = 100;
+
+void display_backlight_init(void) {
+    ledc_timer_config_t ledc_timer = {
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .freq_hz = 5000,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = LEDC_TIMER_0,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ledc_timer_config(&ledc_timer);
+
+    ledc_channel_config_t ledc_channel = {
+        .channel    = LEDC_CHANNEL_0,
+        .duty       = 255,
+        .gpio_num   = DISPLAY_LED_PIN,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .hpoint     = 0,
+        .timer_sel  = LEDC_TIMER_0
+    };
+    ledc_channel_config(&ledc_channel);
+}
+
+void display_backlight_set(int pct) {
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    current_brightness = pct;
+    int duty = (pct * 255) / 100;
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
 
 // Apps
 #include "home_rg_gui.h"
@@ -257,6 +292,8 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(1000)); // Show for 1 second
 
     input_manager_init();
+    display_backlight_init();
+    display_backlight_set(100);
 
     esp_periph_config_t periph_cfg = DEFAULT_ESP_PERIPH_SET_CONFIG();
     g_periph_set = esp_periph_set_init(&periph_cfg);
@@ -274,8 +311,44 @@ void app_main(void)
 
     ESP_LOGI(TAG, "System ready. Entering HOME.");
     
+    static int64_t last_input_time = 0;
+    static bool display_is_dimmed = false;
+
     while (1) {
         button_event_t event = input_manager_get_event();
+        int64_t now_us = esp_timer_get_time();
+        
+        if (event != BTN_NONE) {
+            last_input_time = now_us;
+            if (display_is_dimmed) {
+                display_is_dimmed = false;
+                display_backlight_set(100);
+                event = BTN_NONE; // Swallow event
+            }
+        } else {
+            bool exclude_dim = (current_app == APP_GAMES) || 
+                               (current_app == APP_FILES && app_files_is_in_rsvp_mode());
+            if (!exclude_dim) {
+                int seconds_idle = (now_us - last_input_time) / 1000000;
+                if (seconds_idle >= 40) {
+                    if (current_brightness > 0) {
+                        display_backlight_set(0);
+                        display_is_dimmed = true;
+                    }
+                } else if (seconds_idle >= 25) {
+                    if (current_brightness > 20 && current_brightness != 0) { // Dim to 20%
+                        display_backlight_set(20);
+                        display_is_dimmed = true;
+                    }
+                }
+            } else {
+                last_input_time = now_us; // Keep resetting timer so it doesn't instantly sleep when exiting game
+                if (display_is_dimmed) {
+                    display_is_dimmed = false;
+                    display_backlight_set(100);
+                }
+            }
+        }
         
         // --- GLOBAL INPUT OVERRIDES ---
         if (event == BTN_VOL_UP || event == BTN_VOL_DOWN) {

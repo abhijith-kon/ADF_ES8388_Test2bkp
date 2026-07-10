@@ -10,5 +10,6 @@ void app_files_stop(void);
 void app_files_handle_input(button_event_t event);
 void app_files_tick(void);
 bool app_files_is_in_page_view(void);
+bool app_files_is_in_rsvp_mode(void);
 
 #endif // APP_FILES_H
