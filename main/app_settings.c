@@ -66,7 +66,7 @@ static void neo_update() {
 static uint16_t hsv2rgb565(int h, int s, int v) {
     if (s == 0) return RG_COLOR_RGB(v, v, v);
     int region = h / 60;
-    int remainder = (h - (region * 60)) * 6; 
+    int remainder = ((h % 60) * 255) / 60; 
     
     int p = (v * (255 - s)) >> 8;
     int q = (v * (255 - ((s * remainder) >> 8))) >> 8;
@@ -288,13 +288,35 @@ static void draw_settings_ui(bool full_refresh)
         rg_gui_set_font_size(8);
         rg_gui_draw_text(10, 26, (neo_menu_idx == 0) ? ">> COLOR WHEEL" : "   COLOR WHEEL", (neo_menu_idx == 0) ? AMBER : RG_COLOR_WHITE, APP_BG);
         
-        // Draw Wheel (always overdraw to clear old cursor efficiently)
-        if (!neo_wheel_buf) generate_wheel();
-        if (neo_wheel_buf) rg_display_write(60, 42, 120, 120, 120 * 2, neo_wheel_buf);
+        static int old_cx = -100;
+        static int old_cy = -100;
+        
+        if (full_refresh || old_cx == -100) {
+            if (!neo_wheel_buf) generate_wheel();
+            if (neo_wheel_buf) rg_display_write(60, 42, 120, 120, 120 * 2, neo_wheel_buf);
+        } else if (old_cx != neo_cx || old_cy != neo_cy) {
+            // Erase old cursor patch (6x6)
+            int start_x = 60 + old_cx - 3;
+            int start_y = 60 + old_cy - 3;
+            for (int y = 0; y < 6; y++) {
+                for (int x = 0; x < 6; x++) {
+                    int bx = start_x + x;
+                    int by = start_y + y;
+                    if (bx >= 0 && bx < 120 && by >= 0 && by < 120) {
+                        uint16_t c = neo_wheel_buf[by * 120 + bx];
+                        c = (c >> 8) | (c << 8); // Swap back to native
+                        rg_gui_draw_rect(60 + bx, 42 + by, 1, 1, c);
+                    }
+                }
+            }
+        }
         
         // Draw Cursor
         rg_gui_draw_rect(60 + 60 + neo_cx - 3, 42 + 60 + neo_cy - 3, 6, 6, RG_COLOR_WHITE);
         rg_gui_draw_rect(60 + 60 + neo_cx - 1, 42 + 60 + neo_cy - 1, 2, 2, RG_COLOR_BLACK);
+        
+        old_cx = neo_cx;
+        old_cy = neo_cy;
         
         // Clear and Draw Brightness
         rg_gui_draw_rect(20, 170, 200, 32, APP_BG);
