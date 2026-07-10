@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_random.h"
 #include "nvs_flash.h"
 #include "input_manager.h"
