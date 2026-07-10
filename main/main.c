@@ -105,6 +105,7 @@ static audio_hal_handle_t s_hal = NULL;
 
 uint32_t g_system_boot_count = 0;
 esp_reset_reason_t g_last_reset_reason = ESP_RST_UNKNOWN;
+char g_sys_error_str[32] = "NONE";
 
 void global_volume_set(int vol) {
     if (vol > 100) vol = 100;
@@ -235,6 +236,7 @@ static void rtc_sync_from_ds3231(void) {
         i2c_bus_write_bytes(bus, DS3231_ADDR, &reg, 1, ctrl, 2);
     } else {
         ESP_LOGW(TAG, "Failed to communicate with RTC DS3231 over i2c_bus (err=%d), setting system time to build time", err);
+        strcpy(g_sys_error_str, "RTC_I2C_FAIL");
         struct timeval tv = { .tv_sec = build_time, .tv_usec = 0 };
         settimeofday(&tv, NULL);
     }
@@ -261,14 +263,7 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
 
     g_last_reset_reason = esp_reset_reason();
-    nvs_handle_t nvs_h;
-    if (nvs_open("sys_store", NVS_READWRITE, &nvs_h) == ESP_OK) {
-        nvs_get_u32(nvs_h, "boot_count", &g_system_boot_count);
-        g_system_boot_count++;
-        nvs_set_u32(nvs_h, "boot_count", g_system_boot_count);
-        nvs_commit(nvs_h);
-        nvs_close(nvs_h);
-    }
+    g_system_boot_count++;
 
     ESP_LOGI(TAG, "Starting Retro Console OS...");
 

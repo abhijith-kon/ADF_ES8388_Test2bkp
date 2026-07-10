@@ -12,6 +12,7 @@
 extern int home_ui_current_battery_pct;
 extern uint32_t g_system_boot_count;
 extern esp_reset_reason_t g_last_reset_reason;
+extern char g_sys_error_str[32];
 
 static const char *TAG = "APP_SETTINGS";
 
@@ -121,11 +122,17 @@ static void draw_settings_ui(bool full_refresh)
             
             // --- STORAGE PANEL ---
             rg_gui_draw_text(126, 96, ">> STORAGE", NEON, APP_BG);
-            rg_gui_draw_text(126, 110, "FLASH: 3.2/16MB", RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_text(126, 122, "SD_CARD: OK", RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_text(126, 134, "SD_FREE: 14.8GB", RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_rect(126, 150, 108, 6, RG_COLOR_RGB(50,50,50));
-            rg_gui_draw_rect(126, 150, 40, 6, AMBER); // Fake progress bar
+            rg_gui_draw_text(126, 110, "FLSH:3.2/16M", RG_COLOR_WHITE, APP_BG);
+            rg_gui_draw_text(126, 122, "SDFREE:14.8G", RG_COLOR_WHITE, APP_BG);
+            rg_gui_draw_rect(126, 138, 108, 6, RG_COLOR_RGB(50,50,50));
+            rg_gui_draw_rect(126, 138, 40, 6, AMBER); // Fake progress bar
+            
+            snprintf(buf, sizeof(buf), "ERR:%s", g_sys_error_str);
+            if (strcmp(g_sys_error_str, "NONE") == 0) {
+                rg_gui_draw_text(126, 154, buf, RG_COLOR_WHITE, APP_BG);
+            } else {
+                rg_gui_draw_text(126, 154, buf, RG_COLOR_RGB(255, 30, 30), APP_BG);
+            }
             
             // --- TEMP PANEL ---
             rg_gui_draw_text(6, 176, ">> TEMPERATURE", NEON, APP_BG);
@@ -175,8 +182,8 @@ static void draw_settings_ui(bool full_refresh)
         rg_gui_draw_text(126, 282, buf, AMBER, APP_BG);
         
         // Top status dynamic elements
-        snprintf(buf, sizeof(buf), "BAT: %d%%  SD: OK", home_ui_current_battery_pct);
-        rg_gui_draw_text(140, 4, buf, APP_BG, AMBER);
+        snprintf(buf, sizeof(buf), "BAT:%d%% SD:OK", home_ui_current_battery_pct);
+        rg_gui_draw_text(110, 4, buf, APP_BG, AMBER);
     }
 
     rg_display_drain();
