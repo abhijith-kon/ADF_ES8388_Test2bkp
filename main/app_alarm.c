@@ -61,16 +61,16 @@ static void set_buzzer(bool on) {
             .channel        = LEDC_CHANNEL_1,
             .timer_sel      = LEDC_TIMER_1,
             .intr_type      = LEDC_INTR_DISABLE,
-            .gpio_num       = GPIO_NUM_48,
+            .gpio_num       = GPIO_NUM_46,
             .duty           = 512,
             .hpoint         = 0
         };
         ledc_channel_config(&ledc_channel);
     } else {
         ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
-        gpio_reset_pin(GPIO_NUM_48);
-        gpio_set_direction(GPIO_NUM_48, GPIO_MODE_OUTPUT);
-        gpio_set_level(GPIO_NUM_48, 0);
+        gpio_reset_pin(GPIO_NUM_46);
+        gpio_set_direction(GPIO_NUM_46, GPIO_MODE_OUTPUT);
+        gpio_set_level(GPIO_NUM_46, 0);
     }
 }
 

@@ -32,7 +32,7 @@ static uint16_t *neo_wheel_buf = NULL;
 static void neo_init() {
     if (neo_initialized) return;
     led_strip_config_t strip_config = {
-        .strip_gpio_num = 47, // Changed from 48 (which is the buzzer)
+        .strip_gpio_num = 48,
         .max_leds = 1,
     };
     led_strip_rmt_config_t rmt_config = {
