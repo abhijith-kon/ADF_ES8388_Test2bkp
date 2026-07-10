@@ -6,6 +6,7 @@
 #include "app_settings.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "driver/temperature_sensor.h"
 
 extern int home_ui_current_battery_pct;
 
@@ -73,39 +74,56 @@ static void draw_settings_ui(bool full_refresh)
             rg_gui_draw_text_center(SCREEN_W / 2, 280, "Press B/ESC to Return");
         }
         
-        // Only clear the text area
-        rg_gui_draw_rect(0, 30, SCREEN_W, 240, APP_BG);
-        
         rg_gui_set_font_size(12);
         int y = 40;
         char buf[64];
         
-        // PSRAM
-        multi_heap_info_t info;
-        heap_caps_get_info(&info, MALLOC_CAP_SPIRAM);
-        snprintf(buf, sizeof(buf), "PSRAM: %.1f MB Free", (float)info.total_free_bytes / (1024 * 1024));
-        rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
-        
-        // Internal RAM
-        heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
-        snprintf(buf, sizeof(buf), "SRAM: %.1f KB Free", (float)info.total_free_bytes / 1024);
-        rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
+        if (full_refresh) {
+            // Only clear the text area on full refresh
+            rg_gui_draw_rect(0, 30, SCREEN_W, 240, APP_BG);
+            
+            // PSRAM
+            multi_heap_info_t info;
+            heap_caps_get_info(&info, MALLOC_CAP_SPIRAM);
+            snprintf(buf, sizeof(buf), "PSRAM: %.1f MB Free", (float)info.total_free_bytes / (1024 * 1024));
+            rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
+            
+            // Internal RAM
+            heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
+            snprintf(buf, sizeof(buf), "SRAM: %.1f KB Free", (float)info.total_free_bytes / 1024);
+            rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
 
-        // Battery
-        snprintf(buf, sizeof(buf), "Battery: %d%%", home_ui_current_battery_pct);
-        rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
+            // Battery
+            snprintf(buf, sizeof(buf), "Battery: %d%%", home_ui_current_battery_pct);
+            rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
+            
+            // Temperature
+            temperature_sensor_handle_t temp_sensor = NULL;
+            temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 50);
+            float tsens_value = 0.0;
+            if (temperature_sensor_install(&temp_sensor_config, &temp_sensor) == ESP_OK) {
+                temperature_sensor_enable(temp_sensor);
+                temperature_sensor_get_celsius(temp_sensor, &tsens_value);
+                temperature_sensor_disable(temp_sensor);
+                temperature_sensor_uninstall(temp_sensor);
+            }
+            snprintf(buf, sizeof(buf), "Core Temp: %.1f C", tsens_value);
+            rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
+            
+            // RTC
+            snprintf(buf, sizeof(buf), "RTC Status: OK (DS3231)");
+            rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
+            
+            // CPU
+            snprintf(buf, sizeof(buf), "CPU: ESP32-S3 (240MHz)");
+            rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
+        } else {
+            y += 120; // Skip 6 static lines
+        }
         
-        // Uptime
+        // Uptime (Updates every second)
         uint32_t uptime_s = esp_timer_get_time() / 1000000;
-        snprintf(buf, sizeof(buf), "Uptime: %lum %lus", uptime_s / 60, uptime_s % 60);
-        rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
-        
-        // RTC
-        snprintf(buf, sizeof(buf), "RTC Status: OK (DS3231)");
-        rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
-        
-        // CPU
-        snprintf(buf, sizeof(buf), "CPU: ESP32-S3 (240MHz)");
+        snprintf(buf, sizeof(buf), "Uptime: %lum %lus      ", uptime_s / 60, uptime_s % 60);
         rg_gui_draw_text(10, y, buf, RG_COLOR_WHITE, APP_BG); y += 20;
     }
 

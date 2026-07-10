@@ -2,59 +2,37 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "driver/pulse_cnt.h"
 #include "board_pins_config.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
-/*
- * Input Manager — 74HC165 Shift Register + KY-040 Rotary Encoder
- *
- * 74HC165 (active LOW buttons):
- *   PL  = GPIO 7  (Parallel Load / Latch)
- *   CLK = GPIO 3  (Clock)
- *   QH  = GPIO 6  (Serial Data Out)
- *
- * Button mapping (active LOW — 0 = pressed):
- *   D7 = BTN_A       D3 = BTN_B
- *   D6 = BTN_UP      D2 = BTN_ESCAPE
- *   D5 = BTN_DOWN    D1 = BTN_ENTER
- *   D4 = BTN_LEFT    D0 = BTN_RIGHT
- *
- * KY-040 Rotary Encoder:
- *   CLK = GPIO 1, DT = GPIO 2
- *   CW rotation = BTN_VOL_UP, CCW = BTN_VOL_DOWN
- */
-
 static const char *TAG = "INPUT";
 
-// Encoder state
-static int encoder_pos = 0;
-static int last_clk = 1;
+// PCNT Handle
+static pcnt_unit_handle_t pcnt_unit = NULL;
+static int last_enc_pos = 0;
 
-// Debounce: last reported button state and timestamp
+// Debounce for buttons
 static uint8_t last_button_state = 0xFF;
 static int64_t last_button_time = 0;
-#define DEBOUNCE_US 250000  // 250ms debounce
+#define DEBOUNCE_US 250000
 
 static uint8_t read_shift_register(void)
 {
-    // 1. Latch parallel inputs
     gpio_set_level(SR_PL_PIN, 0);
     esp_rom_delay_us(5);
     gpio_set_level(SR_PL_PIN, 1);
 
-    // 2. Shift out 8 bits (MSB first: D7 comes out first)
     uint8_t data = 0;
     for (int i = 0; i < 8; i++) {
         int bit = gpio_get_level(SR_QH_PIN);
         data |= (bit << (7 - i));
-
         gpio_set_level(SR_CLK_PIN, 1);
         esp_rom_delay_us(5);
         gpio_set_level(SR_CLK_PIN, 0);
         esp_rom_delay_us(5);
     }
-
     return data;
 }
 
@@ -62,52 +40,79 @@ void input_manager_init(void)
 {
     gpio_config_t io_conf = {0};
 
-    // Audio Amplifier Enable (PA_EN) on pin 48
+    // PA_EN
     io_conf.mode = GPIO_MODE_OUTPUT;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     io_conf.pin_bit_mask = (1ULL << GPIO_NUM_48);
     gpio_config(&io_conf);
-    gpio_set_level(GPIO_NUM_48, 1); // 1 = Enable speaker/amplifier
+    gpio_set_level(GPIO_NUM_48, 1);
 
-    // 74HC165 outputs (PL, CLK)
+    // 74HC165
     io_conf.mode = GPIO_MODE_OUTPUT;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     io_conf.pin_bit_mask = (1ULL << SR_PL_PIN) | (1ULL << SR_CLK_PIN);
     gpio_config(&io_conf);
-    gpio_set_level(SR_PL_PIN, 1);  // Latch idle HIGH
-    gpio_set_level(SR_CLK_PIN, 0); // Clock idle LOW
+    gpio_set_level(SR_PL_PIN, 1);
+    gpio_set_level(SR_CLK_PIN, 0);
 
-    // 74HC165 input (QH)
     io_conf.mode = GPIO_MODE_INPUT;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     io_conf.pin_bit_mask = (1ULL << SR_QH_PIN);
     gpio_config(&io_conf);
 
-    // KY-040 Rotary Encoder
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
-    io_conf.pin_bit_mask = (1ULL << ENC_CLK_PIN) | (1ULL << ENC_DT_PIN);
-    gpio_config(&io_conf);
+    // --- PCNT for KY-040 ---
+    pcnt_unit_config_t unit_config = {
+        .high_limit = 10000,
+        .low_limit = -10000,
+    };
+    pcnt_new_unit(&unit_config, &pcnt_unit);
 
-    ESP_LOGI(TAG, "Input manager initialized (74HC165 + KY-040 encoder)");
+    pcnt_glitch_filter_config_t filter_config = {
+        .max_glitch_ns = 1000,
+    };
+    pcnt_unit_set_glitch_filter(pcnt_unit, &filter_config);
+
+    pcnt_chan_config_t chan_a_config = {
+        .edge_gpio_num = ENC_CLK_PIN,
+        .level_gpio_num = ENC_DT_PIN,
+    };
+    pcnt_channel_handle_t pcnt_chan_a = NULL;
+    pcnt_new_channel(pcnt_unit, &chan_a_config, &pcnt_chan_a);
+
+    pcnt_chan_config_t chan_b_config = {
+        .edge_gpio_num = ENC_DT_PIN,
+        .level_gpio_num = ENC_CLK_PIN,
+    };
+    pcnt_channel_handle_t pcnt_chan_b = NULL;
+    pcnt_new_channel(pcnt_unit, &chan_b_config, &pcnt_chan_b);
+
+    pcnt_channel_set_edge_action(pcnt_chan_a, PCNT_CHANNEL_EDGE_ACTION_DECREASE, PCNT_CHANNEL_EDGE_ACTION_INCREASE);
+    pcnt_channel_set_level_action(pcnt_chan_a, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
+    pcnt_channel_set_edge_action(pcnt_chan_b, PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_DECREASE);
+    pcnt_channel_set_level_action(pcnt_chan_b, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
+
+    // Configure pull-ups for encoder pins
+    gpio_set_pull_mode(ENC_CLK_PIN, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(ENC_DT_PIN, GPIO_PULLUP_ONLY);
+
+    pcnt_unit_enable(pcnt_unit);
+    pcnt_unit_clear_count(pcnt_unit);
+    pcnt_unit_start(pcnt_unit);
+
+    ESP_LOGI(TAG, "Input manager initialized (74HC165 + Hardware PCNT encoder)");
 }
 
 button_event_t input_manager_get_event(void)
 {
-    static int last_enc_pos = 0;
-
     // --- 74HC165 Shift Register (buttons) ---
     uint8_t sr = read_shift_register();
     button_event_t evt = BTN_NONE;
 
     if (sr != 0xFF) {
         int64_t now = esp_timer_get_time();
-        // Debounce: only report if state changed or enough time passed
         if (sr != last_button_state || (now - last_button_time) > DEBOUNCE_US) {
             last_button_state = sr;
             last_button_time = now;
-
-            // Check each bit (active LOW). Return first detected press.
             if (!(sr & (1 << 7))) evt = BTN_A;
             else if (!(sr & (1 << 6))) evt = BTN_UP;
             else if (!(sr & (1 << 5))) evt = BTN_DOWN;
@@ -118,34 +123,23 @@ button_event_t input_manager_get_event(void)
             else if (!(sr & (1 << 0))) evt = BTN_RIGHT;
         }
     } else {
-        last_button_state = 0xFF;  // Reset when all released
+        last_button_state = 0xFF;
     }
 
-    // --- KY-040 Rotary Encoder ---
-    int clk = gpio_get_level(ENC_CLK_PIN);
-    int dt = gpio_get_level(ENC_DT_PIN);
-    static int64_t last_enc_time = 0;
-    int64_t now_us = esp_timer_get_time();
+    // --- KY-040 Hardware PCNT ---
+    int pcnt_count = 0;
+    pcnt_unit_get_count(pcnt_unit, &pcnt_count);
     
-    if (clk != last_clk && clk == 0) {
-        if ((now_us - last_enc_time) > 20000) { // 20ms debounce
-            if (dt == 1) {
-                encoder_pos++;
-            } else {
-                encoder_pos--;
-            }
-            last_enc_time = now_us;
-        }
+    // PCNT registers 4 counts per full quadrature cycle (1 click)
+    int encoder_clicks = pcnt_count / 4; 
+    
+    if (encoder_clicks > last_enc_pos) { 
+        last_enc_pos = encoder_clicks; 
+        evt = BTN_VOL_UP; 
     }
-    last_clk = clk;
-
-    if (encoder_pos > last_enc_pos) { last_enc_pos = encoder_pos; evt = BTN_VOL_UP; }
-    else if (encoder_pos < last_enc_pos) { last_enc_pos = encoder_pos; evt = BTN_VOL_DOWN; }
-
-    if (evt != BTN_NONE) {
-        // gpio_set_level(GPIO_NUM_48, 1);
-        // esp_rom_delay_us(10000); // 10ms beep
-        // gpio_set_level(GPIO_NUM_48, 0);
+    else if (encoder_clicks < last_enc_pos) { 
+        last_enc_pos = encoder_clicks; 
+        evt = BTN_VOL_DOWN; 
     }
 
     return evt;

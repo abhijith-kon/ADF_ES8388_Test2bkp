@@ -81,6 +81,7 @@ static const char *index_html =
 "<div class=\"card\">"
 "<h2>Retro Console WAP</h2>"
 "<input type=\"file\" id=\"fileInput\"><br>"
+"<select id=\"targetFolder\" style=\"margin-bottom:10px;\"><option value=\"root\">Root Folder (Songs/TXT)</option><option value=\"ota\">OTA Folder (Firmware)</option></select><br>"
 "<button onclick=\"uploadFile()\">Upload to SD Card</button>"
 "<p id=\"status\"></p>"
 "</div>"
@@ -89,8 +90,9 @@ static const char *index_html =
 "  const file = document.getElementById('fileInput').files[0];"
 "  if (!file) { alert('Select a file!'); return; }"
 "  const status = document.getElementById('status');"
+"  const target = document.getElementById('targetFolder').value;"
 "  const xhr = new XMLHttpRequest();"
-"  xhr.open('POST', '/upload?filename=' + encodeURIComponent(file.name), true);"
+"  xhr.open('POST', '/upload?filename=' + encodeURIComponent(file.name) + '&target=' + target, true);"
 "  xhr.onload = function() {"
 "    if (xhr.status == 200) status.innerText = 'Upload complete!';"
 "    else status.innerText = 'Failed: ' + xhr.statusText;"
@@ -122,6 +124,7 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
 {
     char filepath[256];
     char filename[128] = "uploaded_file.bin";
+    char target_dir[32] = "ota";
     size_t query_len = httpd_req_get_url_query_len(req) + 1;
     if (query_len > 1) {
         char *query = malloc(query_len);
@@ -130,12 +133,17 @@ static esp_err_t upload_post_handler(httpd_req_t *req)
             if (httpd_query_key_value(query, "filename", encoded_filename, sizeof(encoded_filename)) == ESP_OK) {
                 urldecode2(filename, encoded_filename);
             }
+            httpd_query_key_value(query, "target", target_dir, sizeof(target_dir));
         }
         free(query);
     }
 
-    mkdir("/sdcard/OTA", 0777);
-    snprintf(filepath, sizeof(filepath), "/sdcard/OTA/%s", filename);
+    if (strcmp(target_dir, "root") == 0) {
+        snprintf(filepath, sizeof(filepath), "/sdcard/%s", filename);
+    } else {
+        mkdir("/sdcard/OTA", 0777);
+        snprintf(filepath, sizeof(filepath), "/sdcard/OTA/%s", filename);
+    }
     
     snprintf(wap_status_text, sizeof(wap_status_text), "Receiving %s...", filename);
     wap_progress = 0;
