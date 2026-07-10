@@ -283,6 +283,7 @@ static void start_wap_server(void)
     esp_wifi_set_mode(WIFI_MODE_AP);
     esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
     esp_wifi_start();
+    esp_wifi_set_max_tx_power(40); // Reduce TX power to ~10dBm to prevent RF noise coupling into ES8388 analog rails
 
     // Start HTTP Server
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();

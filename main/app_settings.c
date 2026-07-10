@@ -15,13 +15,19 @@ extern esp_reset_reason_t g_last_reset_reason;
 extern char g_sys_error_str[32];
 
 #include "led_strip.h"
+#include <math.h>
 
 static led_strip_handle_t led_strip;
 static bool neo_initialized = false;
 static bool neo_on = false;
 static int neo_hue = 0; // 0-359
+static int neo_sat = 255;
 static int neo_brightness = 50; // 0-100
-static int neo_menu_idx = 0; // 0=Hue, 1=Bright, 2=State
+static int neo_menu_idx = 0; // 0=Wheel, 1=Bright, 2=State
+
+static int neo_cx = 0; // -60 to 60
+static int neo_cy = 0; // -60 to 60
+static uint16_t *neo_wheel_buf = NULL;
 
 static void neo_init() {
     if (neo_initialized) return;
@@ -40,8 +46,17 @@ static void neo_init() {
 
 static void neo_update() {
     if (!neo_initialized) return;
+    
+    float dist = sqrt(neo_cx*neo_cx + neo_cy*neo_cy);
+    if (dist > 60.0f) dist = 60.0f;
+    neo_sat = (int)((dist / 60.0f) * 255.0f);
+    
+    float angle = atan2(neo_cy, neo_cx) * 180.0f / M_PI;
+    if (angle < 0) angle += 360.0f;
+    neo_hue = (int)angle;
+    
     if (neo_on) {
-        led_strip_set_pixel_hsv(led_strip, 0, neo_hue, 255, (neo_brightness * 255) / 100);
+        led_strip_set_pixel_hsv(led_strip, 0, neo_hue, neo_sat, (neo_brightness * 255) / 100);
         led_strip_refresh(led_strip);
     } else {
         led_strip_clear(led_strip);
@@ -67,6 +82,30 @@ static uint16_t hsv2rgb565(int h, int s, int v) {
         default: r = v; g = p; b = q; break;
     }
     return RG_COLOR_RGB(r, g, b);
+}
+
+static void generate_wheel() {
+    if (neo_wheel_buf) return;
+    neo_wheel_buf = malloc(120 * 120 * 2);
+    if (!neo_wheel_buf) return;
+    
+    for (int y = 0; y < 120; y++) {
+        for (int x = 0; x < 120; x++) {
+            int cx = x - 60;
+            int cy = y - 60;
+            float dist = sqrt(cx*cx + cy*cy);
+            if (dist <= 60) {
+                float angle = atan2(cy, cx) * 180.0f / M_PI;
+                if (angle < 0) angle += 360.0f;
+                int h = (int)angle;
+                int s = (int)((dist / 60.0f) * 255.0f);
+                uint16_t c = hsv2rgb565(h, s, 255);
+                neo_wheel_buf[y*120 + x] = (c >> 8) | (c << 8); // Swap for display_write
+            } else {
+                neo_wheel_buf[y*120 + x] = 0; // Black
+            }
+        }
+    }
 }
 
 static const char *TAG = "APP_SETTINGS";
@@ -243,33 +282,37 @@ static void draw_settings_ui(bool full_refresh)
             rg_gui_draw_rect(0, 0, SCREEN_W, 16, NEON);
             rg_gui_set_font_size(8);
             rg_gui_draw_text(4, 4, "NEOPIXEL_CTRL", APP_BG, NEON);
-            
-            draw_rect_outline(2, 20, 236, 180, NEON);
-            
-            // Hue Bar (0 to 359)
-            rg_gui_draw_text(10, 30, (neo_menu_idx == 0) ? ">> HUE" : "   HUE", (neo_menu_idx == 0) ? AMBER : RG_COLOR_WHITE, APP_BG);
-            for (int i=0; i<180; i++) {
-                rg_gui_draw_rect(30 + i, 46, 1, 20, hsv2rgb565(i * 2, 255, 255));
-            }
-            rg_gui_draw_rect(30 + (neo_hue / 2) - 1, 42, 3, 28, RG_COLOR_WHITE); // cursor
-            
-            // Brightness Bar (0 to 100)
-            rg_gui_draw_text(10, 80, (neo_menu_idx == 1) ? ">> BRIGHTNESS" : "   BRIGHTNESS", (neo_menu_idx == 1) ? AMBER : RG_COLOR_WHITE, APP_BG);
-            for (int i=0; i<180; i++) {
-                rg_gui_draw_rect(30 + i, 96, 1, 20, hsv2rgb565(neo_hue, 255, (i * 255) / 180));
-            }
-            rg_gui_draw_rect(30 + (neo_brightness * 180 / 100) - 1, 92, 3, 28, RG_COLOR_WHITE); // cursor
-            
-            // Toggle
-            rg_gui_draw_text(10, 140, (neo_menu_idx == 2) ? ">> STATE" : "   STATE", (neo_menu_idx == 2) ? AMBER : RG_COLOR_WHITE, APP_BG);
-            
-            if (neo_on) {
-                rg_gui_draw_rect(70, 136, 60, 16, NEON);
-                rg_gui_draw_text(84, 140, "ON", APP_BG, NEON);
-            } else {
-                rg_gui_draw_rect(70, 136, 60, 16, RG_COLOR_RGB(255, 0, 0));
-                rg_gui_draw_text(80, 140, "OFF", APP_BG, RG_COLOR_RGB(255, 0, 0));
-            }
+            draw_rect_outline(2, 20, 236, 298, NEON);
+        }
+        
+        rg_gui_set_font_size(8);
+        rg_gui_draw_text(10, 26, (neo_menu_idx == 0) ? ">> COLOR WHEEL" : "   COLOR WHEEL", (neo_menu_idx == 0) ? AMBER : RG_COLOR_WHITE, APP_BG);
+        
+        // Draw Wheel (always overdraw to clear old cursor efficiently)
+        if (!neo_wheel_buf) generate_wheel();
+        if (neo_wheel_buf) rg_display_write(60, 42, 120, 120, 120 * 2, neo_wheel_buf);
+        
+        // Draw Cursor
+        rg_gui_draw_rect(60 + 60 + neo_cx - 3, 42 + 60 + neo_cy - 3, 6, 6, RG_COLOR_WHITE);
+        rg_gui_draw_rect(60 + 60 + neo_cx - 1, 42 + 60 + neo_cy - 1, 2, 2, RG_COLOR_BLACK);
+        
+        // Clear and Draw Brightness
+        rg_gui_draw_rect(20, 170, 200, 32, APP_BG);
+        rg_gui_draw_text(10, 170, (neo_menu_idx == 1) ? ">> BRIGHTNESS" : "   BRIGHTNESS", (neo_menu_idx == 1) ? AMBER : RG_COLOR_WHITE, APP_BG);
+        for (int i=0; i<180; i++) {
+            rg_gui_draw_rect(30 + i, 184, 1, 16, hsv2rgb565(neo_hue, neo_sat, (i * 255) / 180));
+        }
+        rg_gui_draw_rect(30 + (neo_brightness * 180 / 100) - 1, 180, 3, 24, RG_COLOR_WHITE);
+        
+        // Clear and Draw Toggle
+        rg_gui_draw_rect(20, 220, 200, 32, APP_BG);
+        rg_gui_draw_text(10, 220, (neo_menu_idx == 2) ? ">> STATE" : "   STATE", (neo_menu_idx == 2) ? AMBER : RG_COLOR_WHITE, APP_BG);
+        if (neo_on) {
+            rg_gui_draw_rect(70, 234, 60, 16, NEON);
+            rg_gui_draw_text(84, 238, "ON", APP_BG, NEON);
+        } else {
+            rg_gui_draw_rect(70, 234, 60, 16, RG_COLOR_RGB(255, 0, 0));
+            rg_gui_draw_text(80, 238, "OFF", APP_BG, RG_COLOR_RGB(255, 0, 0));
         }
     }
 
@@ -333,29 +376,39 @@ void app_settings_handle_input(button_event_t event)
         }
         
         bool changed = false;
-        if (event == BTN_UP) {
-            neo_menu_idx--;
-            if (neo_menu_idx < 0) neo_menu_idx = 2;
-            changed = true;
-        } else if (event == BTN_DOWN) {
+        if (event == BTN_ENTER || event == BTN_A) {
             neo_menu_idx++;
             if (neo_menu_idx > 2) neo_menu_idx = 0;
             changed = true;
-        } else if (event == BTN_LEFT || event == BTN_VOL_DOWN) {
-            if (neo_menu_idx == 0) { neo_hue -= 10; if (neo_hue < 0) neo_hue += 360; }
-            else if (neo_menu_idx == 1) { neo_brightness -= 5; if (neo_brightness < 0) neo_brightness = 0; }
-            else if (neo_menu_idx == 2) { neo_on = !neo_on; }
-            changed = true;
-        } else if (event == BTN_RIGHT || event == BTN_VOL_UP || event == BTN_A || event == BTN_ENTER) {
-            if (neo_menu_idx == 0) { neo_hue += 10; if (neo_hue > 359) neo_hue -= 360; }
-            else if (neo_menu_idx == 1) { neo_brightness += 5; if (neo_brightness > 100) neo_brightness = 100; }
-            else if (neo_menu_idx == 2) { neo_on = !neo_on; }
-            changed = true;
+        } else {
+            if (neo_menu_idx == 0) { // Wheel
+                if (event == BTN_UP) neo_cy -= 5;
+                else if (event == BTN_DOWN) neo_cy += 5;
+                else if (event == BTN_LEFT || event == BTN_VOL_DOWN) neo_cx -= 5;
+                else if (event == BTN_RIGHT || event == BTN_VOL_UP) neo_cx += 5;
+                
+                // Constrain to circle of radius 60
+                float dist = sqrt(neo_cx*neo_cx + neo_cy*neo_cy);
+                if (dist > 60.0f) {
+                    neo_cx = (int)((neo_cx / dist) * 60.0f);
+                    neo_cy = (int)((neo_cy / dist) * 60.0f);
+                }
+                changed = true;
+            } else if (neo_menu_idx == 1) { // Brightness
+                if (event == BTN_LEFT || event == BTN_VOL_DOWN) { neo_brightness -= 5; if (neo_brightness < 0) neo_brightness = 0; }
+                else if (event == BTN_RIGHT || event == BTN_VOL_UP) { neo_brightness += 5; if (neo_brightness > 100) neo_brightness = 100; }
+                changed = true;
+            } else if (neo_menu_idx == 2) { // Toggle
+                if (event == BTN_LEFT || event == BTN_RIGHT || event == BTN_UP || event == BTN_DOWN || event == BTN_VOL_DOWN || event == BTN_VOL_UP) { 
+                    neo_on = !neo_on; 
+                }
+                changed = true;
+            }
         }
         
         if (changed) {
             neo_update();
-            draw_settings_ui(true);
+            draw_settings_ui(false); // Partial refresh
         }
     }
 }

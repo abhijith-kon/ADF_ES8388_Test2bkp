@@ -9,13 +9,13 @@ static volatile bool s_sound_playing = false;
 static void set_tone(uint32_t freq, bool on) {
     if (app_alarm_is_ringing()) return;
     if (on && freq > 0) {
-        ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, freq);
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 512); // 50% duty on 10-bit timer
-        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+        ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_1, freq);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 512); // 50% duty on 10-bit timer
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
     } else {
         if (!app_alarm_is_ringing()) {
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
         }
     }
 }
