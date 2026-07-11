@@ -277,17 +277,17 @@ static void draw_settings_ui(bool full_refresh)
         rg_gui_set_font_size(8);
         uint32_t uptime_s = esp_timer_get_time() / 1000000;
         snprintf(buf, sizeof(buf), "UPTIME: %02lu:%02lu:%02lu  ", uptime_s / 3600, (uptime_s % 3600) / 60, uptime_s % 60);
-        rg_gui_draw_text(6, 234, buf, AMBER, APP_BG);
+        rg_gui_draw_text(6, 244, buf, AMBER, APP_BG);
 
         snprintf(buf, sizeof(buf), "WIFI: AP MODE");
-        rg_gui_draw_text(126, 234, buf, RG_COLOR_WHITE, APP_BG);
+        rg_gui_draw_text(126, 244, buf, RG_COLOR_WHITE, APP_BG);
         
         // --- GLOBAL ERROR ROW ---
         snprintf(buf, sizeof(buf), "SYS_ERR: %s", g_sys_error_str);
         if (strcmp(g_sys_error_str, "NONE") == 0) {
-            rg_gui_draw_text(6, 250, buf, RG_COLOR_WHITE, APP_BG);
+            rg_gui_draw_text(6, 258, buf, RG_COLOR_WHITE, APP_BG);
         } else {
-            rg_gui_draw_text(6, 250, buf, RG_COLOR_RGB(255, 50, 50), APP_BG);
+            rg_gui_draw_text(6, 258, buf, RG_COLOR_RGB(255, 50, 50), APP_BG);
         }
         
         // Top status dynamic elements
@@ -466,7 +466,7 @@ void app_settings_handle_input(button_event_t event)
 
 void neo_animation_tick(void) {
     static int div = 0;
-    if (++div < 25) return; // Slow down update rate
+    if (++div < 10) return; // Middle ground speed
     div = 0;
 
     if (neo_initialized && neo_on && neo_preset > 0) {
