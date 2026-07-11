@@ -56,6 +56,14 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **WAP Upload Routing:** The Web UI now features a dropdown menu to dynamically route uploaded files to the `/sdcard/` Root folder (for music/txt) or the `/sdcard/OTA/` folder (for firmware binaries).
 - **Smoother Pong:** Added rotary encoder support to the Pong game and smoothed out the paddle movement increments.
 
+### Version 20 & 21 Updates
+- **Neopixel Precision Speed:** Fine-tuned the Neopixel animation speed utilizing a 10x hardware tick divider to strike the perfect balance—yielding buttery-smooth rainbow cycles and breathing pulses.
+- **Game Audio Routing:** Resolved a hardware conflict where the alarm clock app aggressively disabled the LEDC buzzer channel. Game sound algorithms now forcefully commandeer `LEDC_CHANNEL_1` to guarantee Super Mario level-up and game-over melodies always trigger.
+- **Global Alarm Override:** The Alarm and Timer buzzing can now be instantly silenced by pressing *any* button on the console, regardless of the active foreground application.
+- **Live Hardware Telemetry:** Upgraded the "System Status" screen with real-time diagnostics including CPU Clock Frequency (MHz), Free RAM (KB), High-Water RAM (KB), and dynamic firmware version indicators.
+- **Partition Reprovisioning:** Expanded and restructured the ESP32-S3 `partitions.csv` to allocate precisely 2.5MB (0x280000) for all OTA application slots (`updater`, `launcher`, `retro-core`, `prboom-go`), fully maximizing the 16MB flash boundary.
+- **RTC Data Sanity Safety Net:** Upgraded the I2C DS3231 driver to detect time-travel corruption (e.g. Year 2136 due to dead coin cells). Invalid readouts now trigger an automatic physical RTC overwrite using the firmware's compile-time timestamp to ensure perpetual system stability.
+
 ### Tried and Successful
 - **I2S/I2C Conflict Bypass:** Enabled `CONFIG_I2S_SKIP_LEGACY_CONFLICT_CHECK=y` and `CONFIG_I2C_SKIP_LEGACY_CONFLICT_CHECK=y`. Removed all references to new `esp_driver_i2s` headers to allow ADF's legacy drivers to work seamlessly. A `fullclean` was required to apply these changes globally.
 - **I2C Timeout Fix (0x107)**: Lowered the Retro-Go I2C clock speed from 400kHz to 100kHz to compensate for the weak internal pull-up resistors on the ESP32-S3, which prevents the ES8388 communication from timing out upon boot.
