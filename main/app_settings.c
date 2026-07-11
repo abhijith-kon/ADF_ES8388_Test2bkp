@@ -5,6 +5,8 @@
 #include "rg_display.h"
 #include "app_settings.h"
 #include "esp_heap_caps.h"
+#include "esp_ota_ops.h"
+#include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "driver/temperature_sensor.h"
 #include "esp_system.h"
@@ -261,7 +263,7 @@ static void draw_settings_ui(bool full_refresh)
             rg_gui_draw_text(6, 204, buf, RG_COLOR_WHITE, APP_BG);
             
             // Wait, we need to show Wifi, CPU, RAM
-            snprintf(buf, sizeof(buf), "CPU: %lu MHz", esp_clk_cpu_freq() / 1000000);
+            snprintf(buf, sizeof(buf), "CPU: %u MHz", esp_rom_get_cpu_ticks_per_us());
             rg_gui_draw_text(126, 204, buf, RG_COLOR_WHITE, APP_BG);
             
             snprintf(buf, sizeof(buf), "RAM FREE: %lu KB", esp_get_free_heap_size() / 1024);
