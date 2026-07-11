@@ -8,5 +8,6 @@ void app_settings_start(void);
 void app_settings_stop(void);
 void app_settings_handle_input(button_event_t event);
 void app_settings_tick(void);
+void neo_animation_tick(void);
 
 #endif // APP_SETTINGS_H

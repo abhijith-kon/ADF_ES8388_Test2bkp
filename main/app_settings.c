@@ -23,7 +23,9 @@ static bool neo_on = false;
 static int neo_hue = 0; // 0-359
 static int neo_sat = 255;
 static int neo_brightness = 50; // 0-100
-static int neo_menu_idx = 0; // 0=Wheel, 1=Bright, 2=State
+static int neo_menu_idx = 0; // 0=Wheel, 1=Bright, 2=State, 3=Animation
+static int neo_preset = 0; // 0=Solid, 1=Rainbow, 2=Pulse, 3=Strobe
+static int neo_anim_tick = 0;
 
 static int neo_cx = 0; // -60 to 60
 static int neo_cy = 0; // -60 to 60
@@ -47,20 +49,38 @@ static void neo_init() {
 static void neo_update() {
     if (!neo_initialized) return;
     
-    float dist = sqrt(neo_cx*neo_cx + neo_cy*neo_cy);
-    if (dist > 60.0f) dist = 60.0f;
-    neo_sat = (int)((dist / 60.0f) * 255.0f);
-    
-    float angle = atan2(neo_cy, neo_cx) * 180.0f / M_PI;
-    if (angle < 0) angle += 360.0f;
-    neo_hue = (int)angle;
-    
-    if (neo_on) {
-        led_strip_set_pixel_hsv(led_strip, 0, neo_hue, neo_sat, (neo_brightness * 255) / 100);
-        led_strip_refresh(led_strip);
-    } else {
+    if (!neo_on) {
         led_strip_clear(led_strip);
+        return;
     }
+    
+    if (neo_preset == 0) { // Solid
+        float dist = sqrt(neo_cx*neo_cx + neo_cy*neo_cy);
+        if (dist > 60.0f) dist = 60.0f;
+        neo_sat = (int)((dist / 60.0f) * 255.0f);
+        
+        float angle = atan2(neo_cy, neo_cx) * 180.0f / M_PI;
+        if (angle < 0) angle += 360.0f;
+        neo_hue = (int)angle;
+        
+        led_strip_set_pixel_hsv(led_strip, 0, neo_hue, neo_sat, (neo_brightness * 255) / 100);
+    } else if (neo_preset == 1) { // Rainbow
+        neo_anim_tick = (neo_anim_tick + 5) % 360;
+        led_strip_set_pixel_hsv(led_strip, 0, neo_anim_tick, 255, (neo_brightness * 255) / 100);
+    } else if (neo_preset == 2) { // Pulse
+        neo_anim_tick = (neo_anim_tick + 5) % 360;
+        int b = (sin(neo_anim_tick * M_PI / 180.0f) + 1.0f) * 50.0f * (neo_brightness / 100.0f);
+        led_strip_set_pixel_hsv(led_strip, 0, neo_hue, neo_sat, b);
+    } else if (neo_preset == 3) { // Strobe
+        neo_anim_tick = (neo_anim_tick + 1) % 10;
+        if (neo_anim_tick < 5) {
+            led_strip_set_pixel_hsv(led_strip, 0, neo_hue, neo_sat, (neo_brightness * 255) / 100);
+        } else {
+            led_strip_clear(led_strip);
+            return;
+        }
+    }
+    led_strip_refresh(led_strip);
 }
 
 static uint16_t hsv2rgb565(int h, int s, int v) {
@@ -330,12 +350,18 @@ static void draw_settings_ui(bool full_refresh)
         rg_gui_draw_rect(20, 220, 200, 32, APP_BG);
         rg_gui_draw_text(10, 220, (neo_menu_idx == 2) ? ">> STATE" : "   STATE", (neo_menu_idx == 2) ? AMBER : RG_COLOR_WHITE, APP_BG);
         if (neo_on) {
-            rg_gui_draw_rect(70, 234, 60, 16, NEON);
-            rg_gui_draw_text(84, 238, "ON", APP_BG, NEON);
+            rg_gui_draw_rect(70, 216, 60, 16, NEON);
+            rg_gui_draw_text(84, 220, "ON", APP_BG, NEON);
         } else {
-            rg_gui_draw_rect(70, 234, 60, 16, RG_COLOR_RGB(255, 0, 0));
-            rg_gui_draw_text(80, 238, "OFF", APP_BG, RG_COLOR_RGB(255, 0, 0));
+            rg_gui_draw_rect(70, 216, 60, 16, RG_COLOR_RGB(255, 0, 0));
+            rg_gui_draw_text(80, 220, "OFF", APP_BG, RG_COLOR_RGB(255, 0, 0));
         }
+        
+        // Clear and Draw Animation Preset
+        rg_gui_draw_rect(20, 250, 200, 32, APP_BG);
+        rg_gui_draw_text(10, 250, (neo_menu_idx == 3) ? ">> ANIM" : "   ANIM", (neo_menu_idx == 3) ? AMBER : RG_COLOR_WHITE, APP_BG);
+        const char *preset_names[] = {"SOLID", "RAINBOW", "PULSE", "STROBE"};
+        rg_gui_draw_text(70, 250, preset_names[neo_preset], NEON, APP_BG);
     }
 
     rg_display_drain();
@@ -400,7 +426,7 @@ void app_settings_handle_input(button_event_t event)
         bool changed = false;
         if (event == BTN_ENTER || event == BTN_A) {
             neo_menu_idx++;
-            if (neo_menu_idx > 2) neo_menu_idx = 0;
+            if (neo_menu_idx > 3) neo_menu_idx = 0;
             changed = true;
         } else if (event != BTN_NONE) {
             if (neo_menu_idx == 0) { // Wheel
@@ -410,7 +436,6 @@ void app_settings_handle_input(button_event_t event)
                 else if (event == BTN_RIGHT || event == BTN_VOL_UP) { neo_cx += 5; changed = true; }
                 
                 if (changed) {
-                    // Constrain to circle of radius 60
                     float dist = sqrt(neo_cx*neo_cx + neo_cy*neo_cy);
                     if (dist > 60.0f) {
                         neo_cx = (int)((neo_cx / dist) * 60.0f);
@@ -425,13 +450,22 @@ void app_settings_handle_input(button_event_t event)
                     neo_on = !neo_on; 
                     changed = true;
                 }
+            } else if (neo_menu_idx == 3) { // Animation Preset
+                if (event == BTN_LEFT || event == BTN_UP || event == BTN_VOL_DOWN) { neo_preset--; if (neo_preset < 0) neo_preset = 3; changed = true; }
+                else if (event == BTN_RIGHT || event == BTN_DOWN || event == BTN_VOL_UP) { neo_preset++; if (neo_preset > 3) neo_preset = 0; changed = true; }
             }
         }
         
         if (changed) {
             neo_update();
-            draw_settings_ui(false); // Partial refresh
+            draw_settings_ui(false); 
         }
+    }
+}
+
+void neo_animation_tick(void) {
+    if (neo_initialized && neo_on && neo_preset > 0) {
+        neo_update();
     }
 }
 

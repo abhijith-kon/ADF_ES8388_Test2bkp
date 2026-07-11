@@ -41,10 +41,10 @@ static void play_tone_ms(uint32_t freq, uint32_t dur_ms) {
 }
 
 static void tetris_score_task(void *arg) {
-    uint32_t notes[] = {1046, 1318, 1568, 2093};
-    for (int i = 0; i < 4; i++) {
+    uint32_t notes[] = {1319, 1568, 2637, 2093, 2349, 3136};
+    for (int i = 0; i < 6; i++) {
         if (app_alarm_is_ringing()) break;
-        play_tone_ms(notes[i], 75);
+        play_tone_ms(notes[i], 120);
     }
     s_sound_playing = false;
     vTaskDelete(NULL);
@@ -57,14 +57,17 @@ void game_sound_play_score_tetris(void) {
 }
 
 static void tetris_gameover_task(void *arg) {
-    uint32_t notes[] = {392, 330, 294, 261};
-    for (int i = 0; i < 4; i++) {
-        if (app_alarm_is_ringing()) break;
-        play_tone_ms(notes[i], 200);
-    }
-    if (!app_alarm_is_ringing()) {
-        play_tone_ms(130, 600);
-    }
+    if (app_alarm_is_ringing()) goto done;
+    play_tone_ms(494, 150); 
+    play_tone_ms(698, 300); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(698, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(698, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(659, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(587, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(523, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(330, 150); 
+    play_tone_ms(262, 150); 
+done:
     s_sound_playing = false;
     vTaskDelete(NULL);
 }
@@ -111,10 +114,10 @@ void game_sound_play_gameover_2048(void) {
 }
 
 static void level_up_task(void *arg) {
-    uint32_t notes[] = {1046, 1318, 1568, 2093};
-    for (int i = 0; i < 4; i++) {
+    uint32_t notes[] = {1319, 1568, 2637, 2093, 2349, 3136};
+    for (int i = 0; i < 6; i++) {
         if (app_alarm_is_ringing()) break;
-        play_tone_ms(notes[i], 75);
+        play_tone_ms(notes[i], 120);
     }
     s_sound_playing = false;
     vTaskDelete(NULL);
@@ -127,14 +130,17 @@ void game_sound_play_level_up(void) {
 }
 
 static void game_over_task(void *arg) {
-    uint32_t notes[] = {392, 330, 294, 261};
-    for (int i = 0; i < 4; i++) {
-        if (app_alarm_is_ringing()) break;
-        play_tone_ms(notes[i], 200);
-    }
-    if (!app_alarm_is_ringing()) {
-        play_tone_ms(130, 600);
-    }
+    if (app_alarm_is_ringing()) goto done;
+    play_tone_ms(494, 150); 
+    play_tone_ms(698, 300); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(698, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(698, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(659, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(587, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(523, 150); vTaskDelay(pdMS_TO_TICKS(50));
+    play_tone_ms(330, 150); 
+    play_tone_ms(262, 150); 
+done:
     s_sound_playing = false;
     vTaskDelete(NULL);
 }

@@ -536,6 +536,7 @@ void app_main(void)
         }
 
         app_alarm_tick(); // Check and ring alarm across all apps
+        neo_animation_tick(); // Run Neopixel animations across all apps
         vTaskDelay(1);
     }
 }
