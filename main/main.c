@@ -334,8 +334,6 @@ void app_main(void)
         int64_t now_us = esp_timer_get_time();
         
         if (event != BTN_NONE) {
-            rg_gui_draw_battery_indicator();
-            
             if (app_alarm_is_ringing()) {
                 app_alarm_silence();
                 continue;
