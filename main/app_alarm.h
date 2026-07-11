@@ -13,5 +13,6 @@ void app_alarm_tick(void);
 bool app_alarm_is_in_ui(void);
 bool app_alarm_is_ringing(void);
 void app_alarm_silence(void);
+void app_alarm_stop(void);
 
 #endif

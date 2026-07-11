@@ -65,10 +65,10 @@ static void neo_update() {
         
         led_strip_set_pixel_hsv(led_strip, 0, neo_hue, neo_sat, (neo_brightness * 255) / 100);
     } else if (neo_preset == 1) { // Rainbow
-        neo_anim_tick = (neo_anim_tick + 5) % 360;
+        neo_anim_tick = (neo_anim_tick + 1) % 360;
         led_strip_set_pixel_hsv(led_strip, 0, neo_anim_tick, 255, (neo_brightness * 255) / 100);
     } else if (neo_preset == 2) { // Pulse
-        neo_anim_tick = (neo_anim_tick + 5) % 360;
+        neo_anim_tick = (neo_anim_tick + 2) % 360;
         int b = (sin(neo_anim_tick * M_PI / 180.0f) + 1.0f) * 50.0f * (neo_brightness / 100.0f);
         led_strip_set_pixel_hsv(led_strip, 0, neo_hue, neo_sat, b);
     } else if (neo_preset == 3) { // Strobe
@@ -257,42 +257,41 @@ static void draw_settings_ui(bool full_refresh)
             
             // --- SYSTEM PANEL ---
             rg_gui_draw_text(6, 190, ">> SYSTEM", NEON, APP_BG);
-            snprintf(buf, sizeof(buf), "BATTERY: %d%%", home_ui_current_battery_pct);
+            snprintf(buf, sizeof(buf), "FIRMWARE: V20");
             rg_gui_draw_text(6, 204, buf, RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_text(126, 204, "RTC: DS3231", RG_COLOR_WHITE, APP_BG);
             
-            const char* rst_str = "UNKNOWN";
-            switch(g_last_reset_reason) {
-                case ESP_RST_POWERON: rst_str = "POWER_ON"; break;
-                case ESP_RST_SW: rst_str = "SW_RESET"; break;
-                case ESP_RST_PANIC: rst_str = "PANIC"; break;
-                case ESP_RST_INT_WDT: rst_str = "INT_WDT"; break;
-                case ESP_RST_TASK_WDT: rst_str = "TASK_WDT"; break;
-                case ESP_RST_DEEPSLEEP: rst_str = "DEEPSLEEP"; break;
-                default: break;
-            }
-            snprintf(buf, sizeof(buf), "RST: %s", rst_str);
+            // Wait, we need to show Wifi, CPU, RAM
+            snprintf(buf, sizeof(buf), "CPU: %lu MHz", esp_clk_cpu_freq() / 1000000);
+            rg_gui_draw_text(126, 204, buf, RG_COLOR_WHITE, APP_BG);
+            
+            snprintf(buf, sizeof(buf), "RAM FREE: %lu KB", esp_get_free_heap_size() / 1024);
+            rg_gui_draw_text(6, 218, buf, RG_COLOR_WHITE, APP_BG);
+            
+            snprintf(buf, sizeof(buf), "RAM HIGH: %lu KB", (esp_get_free_heap_size() - esp_get_minimum_free_heap_size()) / 1024);
             rg_gui_draw_text(126, 218, buf, RG_COLOR_WHITE, APP_BG);
-            rg_gui_draw_text(6, 218, "WDT: OK", RG_COLOR_WHITE, APP_BG);
         }
         
         // --- UPTIME DYNAMIC UPDATE ---
         rg_gui_set_font_size(8);
         uint32_t uptime_s = esp_timer_get_time() / 1000000;
         snprintf(buf, sizeof(buf), "UPTIME: %02lu:%02lu:%02lu  ", uptime_s / 3600, (uptime_s % 3600) / 60, uptime_s % 60);
-        rg_gui_draw_text(6, 244, buf, AMBER, APP_BG);
+        rg_gui_draw_text(6, 234, buf, AMBER, APP_BG);
+
+        snprintf(buf, sizeof(buf), "WIFI: AP MODE");
+        rg_gui_draw_text(126, 234, buf, RG_COLOR_WHITE, APP_BG);
         
         // --- GLOBAL ERROR ROW ---
         snprintf(buf, sizeof(buf), "SYS_ERR: %s", g_sys_error_str);
         if (strcmp(g_sys_error_str, "NONE") == 0) {
-            rg_gui_draw_text(6, 260, buf, RG_COLOR_WHITE, APP_BG);
+            rg_gui_draw_text(6, 250, buf, RG_COLOR_WHITE, APP_BG);
         } else {
-            rg_gui_draw_text(6, 260, buf, RG_COLOR_RGB(255, 50, 50), APP_BG);
+            rg_gui_draw_text(6, 250, buf, RG_COLOR_RGB(255, 50, 50), APP_BG);
         }
         
         // Top status dynamic elements
         snprintf(buf, sizeof(buf), "BAT:%d%% SD:OK", home_ui_current_battery_pct);
         rg_gui_draw_text(110, 4, buf, APP_BG, AMBER);
+
     } else if (current_view == 2) { // Neopixel UI
         uint16_t NEON = RG_COLOR_RGB(57, 255, 20);
         uint16_t AMBER = RG_COLOR_RGB(255, 170, 0);
@@ -464,6 +463,10 @@ void app_settings_handle_input(button_event_t event)
 }
 
 void neo_animation_tick(void) {
+    static int div = 0;
+    if (++div < 25) return; // Slow down update rate
+    div = 0;
+
     if (neo_initialized && neo_on && neo_preset > 0) {
         neo_update();
     }

@@ -9,6 +9,16 @@ static volatile bool s_sound_playing = false;
 static void set_tone(uint32_t freq, bool on) {
     if (app_alarm_is_ringing()) return;
     if (on && freq > 0) {
+        ledc_channel_config_t ledc_channel = {
+            .speed_mode     = LEDC_LOW_SPEED_MODE,
+            .channel        = LEDC_CHANNEL_1,
+            .timer_sel      = LEDC_TIMER_1,
+            .intr_type      = LEDC_INTR_DISABLE,
+            .gpio_num       = GPIO_NUM_46,
+            .duty           = 512,
+            .hpoint         = 0
+        };
+        ledc_channel_config(&ledc_channel);
         ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_1, freq);
         ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 512); // 50% duty on 10-bit timer
         ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);

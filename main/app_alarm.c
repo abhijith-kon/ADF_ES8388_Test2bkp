@@ -265,16 +265,9 @@ bool app_alarm_is_ringing(void) {
 }
 
 void app_alarm_silence(void) {
-    if (is_ringing) {
-        is_ringing = false;
-        set_buzzer(false);
-        ESP_LOGI(TAG, "Alarm silenced.");
-    }
-    if (tmr_ringing) {
-        tmr_ringing = false;
-        set_buzzer(false);
-        ESP_LOGI(TAG, "Timer silenced.");
-    }
+    is_ringing = false;
+    tmr_ringing = false;
+    set_buzzer(false);
 }
 
 void app_alarm_handle_input(button_event_t event) {
