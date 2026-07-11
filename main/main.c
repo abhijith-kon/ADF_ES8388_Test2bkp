@@ -218,9 +218,10 @@ static void rtc_sync_from_ds3231(void) {
             .tm_year = year - 1900
         };
         time_t rtc_time = mktime(&rtc_tm);
+        bool time_corrupt = (year < 2026 || year > 2099 || mon < 1 || mon > 12 || mday < 1 || mday > 31 || hour > 23 || min > 59 || sec > 59);
 
-        if (year < 2026 || rtc_time < build_time) {
-            ESP_LOGW(TAG, "RTC DS3231 time (%04d-%02d-%02d %02d:%02d:%02d) is behind build time, updating to build time", year, mon, mday, hour, min, sec);
+        if (time_corrupt || rtc_time < build_time) {
+            ESP_LOGW(TAG, "RTC DS3231 time corrupt or behind build time (%04d-%02d-%02d %02d:%02d:%02d), updating to build time", year, mon, mday, hour, min, sec);
             int wday_ds = (build_tm.tm_wday + 1);
             rtc_set_time_ds3231(bus, wday_ds, build_tm.tm_year + 1900, build_tm.tm_mon + 1, build_tm.tm_mday, build_tm.tm_hour, build_tm.tm_min, build_tm.tm_sec);
             rtc_tm = build_tm;
