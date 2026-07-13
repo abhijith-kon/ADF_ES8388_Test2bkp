@@ -382,11 +382,15 @@ void app_main(void)
 
         // --- INPUT ROUTING ---
         if (current_app == APP_HOME) {
-            if (event == BTN_LEFT) home_ui_move_left();
+            if (event == BTN_B && app_music_is_playing()) {
+                app_music_stop();
+            }
+            else if (event == BTN_LEFT) home_ui_move_left();
             else if (event == BTN_RIGHT) home_ui_move_right();
             else if (event == BTN_ENTER) {
                 int selected = home_ui_get_selected();
                 if (selected == 0) { // APP_FILES
+                    if (app_music_is_playing()) app_music_stop();
                     current_app = APP_FILES;
                     app_files_start();
                 }
@@ -395,26 +399,32 @@ void app_main(void)
                     app_music_start();
                 } 
                 else if (selected == 2) { // APP_RADIO
+                    if (app_music_is_playing()) app_music_stop();
                     current_app = APP_RADIO;
                     app_radio_start();
                 }
                 else if (selected == 3) { // APP_WIFI
+                    if (app_music_is_playing()) app_music_stop();
                     current_app = APP_WIFI;
                     app_wifi_start();
                 }
                 else if (selected == 4) { // APP_AUDIO_FX
+                    if (app_music_is_playing()) app_music_stop();
                     current_app = APP_AUDIO_FX;
                     app_audio_fx_start();
                 }
                 else if (selected == 5) { // APP_SETTINGS (formerly APP_VOL)
+                    // Settings can play music in bg
                     current_app = APP_SETTINGS;
                     app_settings_start();
                 }
                 else if (selected == 6) { // APP_ALARM
+                    if (app_music_is_playing()) app_music_stop();
                     current_app = APP_ALARM;
                     app_alarm_start();
                 }
                 else if (selected == 7) { // APP_GAMES
+                    if (app_music_is_playing()) app_music_stop();
                     current_app = APP_GAMES;
                     ui_init(); // Draw the retro-go launcher
                 }
@@ -433,7 +443,11 @@ void app_main(void)
         }
         else if (current_app == APP_MUSIC) {
             if (event == BTN_ESCAPE && !app_music_is_in_player_ui()) {
-                app_music_stop();
+                if (app_music_is_playing()) {
+                    app_music_hide();
+                } else {
+                    app_music_stop();
+                }
                 current_app = APP_HOME;
                 // Drain any in-flight DMA from music app before clearing
                 rg_display_drain();
@@ -515,6 +529,9 @@ void app_main(void)
             home_ui_tick();
             home_ui_update();
             home_ui_draw();
+            if (app_music_is_playing()) {
+                app_music_bg_tick();
+            }
         } 
         else if (current_app == APP_MUSIC) {
             app_music_tick();
@@ -538,6 +555,9 @@ void app_main(void)
             app_audio_fx_tick();
         }
         else if (current_app == APP_SETTINGS) {
+            if (app_music_is_playing()) {
+                app_music_bg_tick();
+            }
             app_settings_tick();
         }
 

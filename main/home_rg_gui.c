@@ -70,6 +70,7 @@ typedef struct {
     char time_text[8];
     char date_text[32];
     char app_text[32];
+    char moon_text[16];
     bool need_time_refresh;
     bool need_app_text_refresh;
     bool needs_redraw;
@@ -150,6 +151,12 @@ static void home_ui_update_clock(void) {
     snprintf(home_ui.date_text, sizeof(home_ui.date_text), "%s, %s %02d, %d", 
              days[wday], months[mon], tinfo->tm_mday, 1900 + tinfo->tm_year);
     
+    int phase = (((long long)now - 592500) % 2551443) * 8 / 2551443;
+    const char *phases[] = {"NEW", "WAX CRES", "1ST QTR", "WAX GIB", "FULL", "WAN GIB", "3RD QTR", "WAN CRES"};
+    if (phase >= 0 && phase < 8) {
+        snprintf(home_ui.moon_text, sizeof(home_ui.moon_text), "%s", phases[phase]);
+    }
+
     home_ui.needs_redraw = true;
 }
 
@@ -422,6 +429,11 @@ void home_ui_draw(void) {
                 
                 rg_gui_draw_rect(bx + 1, by + 1, level_w, bh - 2, color);
             }
+            
+            // Draw moon phase
+            rg_gui_set_font_size(8);
+            rg_gui_set_text_color(RG_COLOR_RGB(200, 200, 220));
+            rg_gui_draw_text_box(bx - 65, by + 1, 60, 12, RG_COLOR_BLACK, home_ui.moon_text);
         }
         
         home_ui.need_time_refresh = false;

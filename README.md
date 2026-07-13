@@ -55,6 +55,9 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **Sci-Fi System Diagnostic UI:** Completely redesigned the System Status view into an amber-and-black industrial diagnostic terminal featuring live Core Temperature, Uptime, Memory blocks, and Storage stats.
 - **WAP Upload Routing:** The Web UI now features a dropdown menu to dynamically route uploaded files to the `/sdcard/` Root folder (for music/txt) or the `/sdcard/OTA/` folder (for firmware binaries).
 - **Smoother Pong:** Added rotary encoder support to the Pong game and smoothed out the paddle movement increments.
+### Version 22 (Latest)
+- **Background Music**: Music app now supports background playback. You can go back to the Home screen and let it play, and it will keep playing if you open Settings. Opening other apps (Games, Files, Radio, etc.) automatically stops the music. You can also manually stop background playback on the Home screen by pressing the `B` button!
+- **Moon Phase Indicator**: Added a real-time calculated moon phase visualization on the main Home screen (next to the large clock display).
 
 ### Version 20 & 21 Updates
 - **Neopixel Precision Speed:** Fine-tuned the Neopixel animation speed utilizing a 10x hardware tick divider to strike the perfect balance—yielding buttery-smooth rainbow cycles and breathing pulses.

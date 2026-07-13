@@ -1393,7 +1393,7 @@ void app_music_start(void)
 
 void app_music_stop(void)
 {
-    ESP_LOGI(TAG, "Music App Stopped");
+    ESP_LOGI(TAG, "Music App Stopped (Full)");
     in_player_ui = false;
     if (vis_buf) {
         free(vis_buf);
@@ -1411,6 +1411,17 @@ void app_music_stop(void)
     if (fft_ringbuf) {
         rb_reset(fft_ringbuf);
     }
+}
+
+void app_music_hide(void)
+{
+    ESP_LOGI(TAG, "Music App Hidden");
+    in_player_ui = false;
+}
+
+bool app_music_is_playing(void)
+{
+    return is_playing;
 }
 
 static void pause_current_track(void)
@@ -1661,12 +1672,8 @@ void app_music_handle_input(button_event_t event)
     }
 }
 
-void app_music_tick(void)
+void app_music_bg_tick(void)
 {
-    if (total_tracks != last_known_total_tracks) {
-        last_known_total_tracks = total_tracks;
-        list_full_dirty = true;
-    }
     // 1. Handle audio pipeline events
     if (evt) {
         audio_event_iface_msg_t msg;
@@ -1719,6 +1726,16 @@ void app_music_tick(void)
             }
         }
     }
+}
+
+void app_music_tick(void)
+{
+    if (total_tracks != last_known_total_tracks) {
+        last_known_total_tracks = total_tracks;
+        list_full_dirty = true;
+    }
+    
+    app_music_bg_tick();
 
     // If in Player UI, handle visualizer, time updates, title scrolling, volume bar
     if (in_player_ui) {
