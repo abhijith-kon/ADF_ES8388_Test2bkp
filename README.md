@@ -57,7 +57,10 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **Smoother Pong:** Added rotary encoder support to the Pong game and smoothed out the paddle movement increments.
 ### Version 23 (Latest)
 - **FLAC Support Enhancements**: Added robust native FLAC metadata parsing (`STREAMINFO`, `VORBIS_COMMENT`, `PICTURE`). FLAC files now accurately display Title, Artist, Album, Genre, and Album Art (Baseline JPEG/PNG) natively, alongside a dynamically calculated accurate average bitrate.
-- **Increased Playlist Limit**: The maximum number of playlist files has been expanded from 1,000 to 5,000 to support larger music libraries.
+- **Sleep Timer & Ambience Playback**: The Alarm app now features a fully functional sleep timer with an integrated Ambience player. You can choose an ambience track, set a timer (e.g., 30 mins, 1 hour), and the background music/ambience will automatically stop playing when the timer expires.
+- **Battery Life Estimation**: Upgraded the Settings UI to not only display battery percentage but also intelligently estimate remaining battery life in hours and minutes (`BAT: 80% (9h 36m left)`) dynamically.
+- **Neopixel Color Accuracy Fix**: Fixed an underlying bit-shifting issue with the WS2812 Neopixel driver where colors were rendering incorrectly (e.g., green channel overriding others) ensuring true-to-life HSV color wheel representations.
+- **Increased Playlist Limit & Background Scanning**: The maximum number of playlist files has been expanded from 1,000 to 5,000 to support larger music libraries, and playlists now generate seamlessly in the background.
 - **Memory Optimization**: Moved large tag buffers (e.g. for FLAC comment extraction) from stack allocation to the heap to prevent stack overflows during ESP-ADF audio pipeline creation.
 
 ### Version 22 Updates
