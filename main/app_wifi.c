@@ -274,9 +274,12 @@ static void start_wap_server(void)
             .ssid = "RetroConsole",
             .ssid_len = strlen("RetroConsole"),
             .channel = 6,
-            .password = "",
+            .password = "retro123",
             .max_connection = 4,
-            .authmode = WIFI_AUTH_OPEN
+            .authmode = WIFI_AUTH_WPA2_PSK,
+            .pmf_cfg = {
+                .required = false,
+            },
         },
     };
 
