@@ -13,5 +13,6 @@ void home_ui_update(void);
 void home_ui_draw(void);
 int home_ui_get_selected(void);
 void home_ui_force_redraw(void);
+void home_ui_update_battery(void);
 
 #endif

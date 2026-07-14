@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
+#include <dirent.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -22,7 +23,7 @@ static const char *TAG = "APP_ALARM";
 #define HIGHLIGHT_COLOR RG_COLOR_RGB(0x00, 0xC0, 0xFF)
 #define TEXT_COLOR      RG_COLOR_WHITE
 
-enum { MODE_MENU, MODE_ALARM, MODE_STOPWATCH, MODE_TIMER };
+enum { MODE_MENU, MODE_ALARM, MODE_STOPWATCH, MODE_TIMER, MODE_SLEEP };
 static int app_mode = MODE_MENU;
 static int menu_sel = 0;
 
@@ -49,6 +50,15 @@ static int tmr_secs = 0;
 static int tmr_sel = 0; 
 static int64_t tmr_end_time = 0;
 static bool tmr_ringing = false;
+
+static int sleep_minutes_sel = 0; // 0=OFF, 1=15, 2=30, 3=45, 4=60
+static int sleep_minutes_opts[] = {0, 15, 30, 45, 60};
+static int64_t sleep_end_time = 0;
+static bool sleep_running = false;
+static char sleep_files[10][64];
+static int num_sleep_files = 0;
+static int sleep_file_sel = 0;
+static int sleep_ui_field = 0; // 0 = Timer, 1 = File
 
 static bool buzzer_is_on = false;
 
@@ -85,7 +95,22 @@ void app_alarm_init(void) {
     ledc_timer_config(&ledc_timer);
     buzzer_is_on = true; // force an update
     set_buzzer(false);
-    ESP_LOGI(TAG, "Clock initialized");
+    
+    DIR *dir = opendir("/sdcard/sleep");
+    if (dir) {
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (num_sleep_files < 10) {
+                if (strstr(ent->d_name, ".mp3") || strstr(ent->d_name, ".wav") || strstr(ent->d_name, ".flac")) {
+                    strncpy(sleep_files[num_sleep_files], ent->d_name, 63);
+                    sleep_files[num_sleep_files][63] = '\0';
+                    num_sleep_files++;
+                }
+            }
+        }
+        closedir(dir);
+    }
+    ESP_LOGI(TAG, "Clock initialized. Sleep files: %d", num_sleep_files);
 }
 
 static void draw_menu_ui(void) {
@@ -95,14 +120,14 @@ static void draw_menu_ui(void) {
         rg_gui_set_text_color(HIGHLIGHT_COLOR);
         rg_gui_draw_text_box(0, 15, SCREEN_W, 25, BG_COLOR, "CLOCK APPS");
     }
-    const char *opts[] = {"CLOCK", "STOPWATCH", "TIMER"};
-    for (int i = 0; i < 3; i++) {
+    const char *opts[] = {"CLOCK", "STOPWATCH", "TIMER", "SLEEP"};
+    for (int i = 0; i < 4; i++) {
         uint16_t box_bg = (menu_sel == i) ? HIGHLIGHT_COLOR : BOX_COLOR;
         uint16_t box_fg = (menu_sel == i) ? RG_COLOR_BLACK : TEXT_COLOR;
-        rg_gui_draw_rect(40, 80 + i*50, 160, 36, box_bg);
+        rg_gui_draw_rect(40, 50 + i*50, 160, 36, box_bg);
         rg_gui_set_font_size(12);
         rg_gui_set_text_color(box_fg);
-        rg_gui_draw_text_box(40, 88 + i*50, 160, 20, box_bg, opts[i]);
+        rg_gui_draw_text_box(40, 58 + i*50, 160, 20, box_bg, opts[i]);
     }
     rg_display_drain();
 }
@@ -235,12 +260,59 @@ static void draw_timer_ui(void) {
     rg_display_drain();
 }
 
+static void draw_sleep_ui(void) {
+    if (force_full_redraw) {
+        rg_gui_draw_rect(0, 0, SCREEN_W, SCREEN_H, BG_COLOR);
+        rg_gui_set_font_size(16);
+        rg_gui_set_text_color(HIGHLIGHT_COLOR);
+        rg_gui_draw_text_box(0, 15, SCREEN_W, 25, BG_COLOR, "SLEEP TIMER");
+        
+        rg_gui_set_font_size(10);
+        rg_gui_set_text_color(HIGHLIGHT_COLOR);
+        rg_gui_draw_text_box(0, 280, SCREEN_W, 20, BG_COLOR, "[UP/DN] SET  [ENTER] START/STOP");
+    }
+
+    rg_gui_draw_rect(30, 100, 180, 50, BOX_COLOR);
+    char txt[32];
+    if (sleep_running) {
+        int64_t rem = sleep_end_time - esp_timer_get_time();
+        if (rem < 0) rem = 0;
+        int m = (rem / 60000000) % 60;
+        int s = (rem / 1000000) % 60;
+        snprintf(txt, sizeof(txt), "%02d:%02d LEFT", m, s);
+    } else {
+        if (sleep_minutes_opts[sleep_minutes_sel] == 0) {
+            snprintf(txt, sizeof(txt), "OFF");
+        } else {
+            snprintf(txt, sizeof(txt), "%d MINS", sleep_minutes_opts[sleep_minutes_sel]);
+        }
+    }
+    rg_gui_set_font_size(16);
+    rg_gui_set_text_color((sleep_ui_field == 0) ? HIGHLIGHT_COLOR : TEXT_COLOR);
+    rg_gui_draw_text_box(30, 115, 180, 30, BOX_COLOR, txt);
+
+    // Sleep File Display
+    rg_gui_draw_rect(10, 160, 220, 50, BOX_COLOR);
+    char ftxt[64];
+    if (num_sleep_files > 0) {
+        snprintf(ftxt, sizeof(ftxt), "%s", sleep_files[sleep_file_sel]);
+    } else {
+        snprintf(ftxt, sizeof(ftxt), "No Ambience");
+    }
+    rg_gui_set_font_size(8);
+    rg_gui_set_text_color((sleep_ui_field == 1) ? HIGHLIGHT_COLOR : TEXT_COLOR);
+    rg_gui_draw_text_box(10, 175, 220, 20, BOX_COLOR, ftxt);
+
+    rg_display_drain();
+}
+
 static void draw_current_ui(void) {
     if (!in_ui) return;
     if (app_mode == MODE_MENU) draw_menu_ui();
     else if (app_mode == MODE_ALARM) draw_alarm_ui();
     else if (app_mode == MODE_STOPWATCH) draw_stopwatch_ui();
     else if (app_mode == MODE_TIMER) draw_timer_ui();
+    else if (app_mode == MODE_SLEEP) draw_sleep_ui();
     force_full_redraw = false;
 }
 
@@ -278,12 +350,20 @@ void app_alarm_handle_input(button_event_t event) {
     }
     bool dirty = false;
     if (app_mode == MODE_MENU) {
-        if (event == BTN_DOWN) { menu_sel = (menu_sel + 1) % 3; dirty = true; }
-        else if (event == BTN_UP) { menu_sel = (menu_sel + 2) % 3; dirty = true; }
+        if (event == BTN_DOWN) { menu_sel = (menu_sel + 1) % 4; dirty = true; }
+        else if (event == BTN_UP) { menu_sel = (menu_sel + 3) % 4; dirty = true; }
         else if (event == BTN_A || event == BTN_ENTER) {
-            if (menu_sel == 0) { app_mode = MODE_ALARM; selected_field = 0; force_full_redraw = true; }
+            if (menu_sel == 0) { 
+                app_mode = MODE_ALARM; 
+                selected_field = 0; 
+                force_full_redraw = true; 
+                extern bool app_music_is_playing(void);
+                extern void app_music_stop(void);
+                if (app_music_is_playing()) app_music_stop();
+            }
             else if (menu_sel == 1) { app_mode = MODE_STOPWATCH; force_full_redraw = true; }
             else if (menu_sel == 2) { app_mode = MODE_TIMER; tmr_sel = 0; force_full_redraw = true; }
+            else if (menu_sel == 3) { app_mode = MODE_SLEEP; force_full_redraw = true; }
             dirty = true;
         }
         else if (event == BTN_ESCAPE) { app_alarm_stop(); }
@@ -360,6 +440,35 @@ void app_alarm_handle_input(button_event_t event) {
             }
             dirty = true;
         }
+    } else if (app_mode == MODE_SLEEP) {
+        if (event == BTN_ESCAPE) { app_mode = MODE_MENU; force_full_redraw = true; dirty = true; }
+        else if (event == BTN_LEFT || event == BTN_RIGHT) {
+            sleep_ui_field = (sleep_ui_field + 1) % 2;
+            dirty = true;
+        }
+        else if (event == BTN_UP && !sleep_running) {
+            if (sleep_ui_field == 0) sleep_minutes_sel = (sleep_minutes_sel + 1) % 5;
+            else if (num_sleep_files > 0) sleep_file_sel = (sleep_file_sel - 1 + num_sleep_files) % num_sleep_files;
+            dirty = true;
+        } else if (event == BTN_DOWN && !sleep_running) {
+            if (sleep_ui_field == 0) sleep_minutes_sel = (sleep_minutes_sel + 4) % 5;
+            else if (num_sleep_files > 0) sleep_file_sel = (sleep_file_sel + 1) % num_sleep_files;
+            dirty = true;
+        } else if (event == BTN_ENTER) {
+            if (sleep_running) {
+                sleep_running = false;
+                extern void app_music_stop(void);
+                app_music_stop();
+            } else if (sleep_minutes_opts[sleep_minutes_sel] > 0) {
+                sleep_end_time = esp_timer_get_time() + (sleep_minutes_opts[sleep_minutes_sel] * 60000000LL);
+                sleep_running = true;
+                if (num_sleep_files > 0) {
+                    extern void app_music_play_sleep_ambience(const char *filename);
+                    app_music_play_sleep_ambience(sleep_files[sleep_file_sel]);
+                }
+            }
+            dirty = true;
+        }
     }
 
     if (dirty && in_ui) draw_current_ui();
@@ -389,7 +498,24 @@ void app_alarm_tick(void) {
     if (tmr_running) {
         if (esp_timer_get_time() >= tmr_end_time) {
             tmr_running = false;
-            tmr_ringing = true;
+            extern bool app_music_is_playing(void);
+            extern void app_music_stop(void);
+            if (app_music_is_playing()) {
+                app_music_stop();
+            } else {
+                tmr_ringing = true;
+            }
+        }
+    }
+
+    if (sleep_running) {
+        if (esp_timer_get_time() >= sleep_end_time) {
+            sleep_running = false;
+            extern bool app_music_is_playing(void);
+            extern void app_music_stop(void);
+            if (app_music_is_playing()) {
+                app_music_stop();
+            }
         }
     }
 
@@ -417,6 +543,10 @@ void app_alarm_tick(void) {
                 needs_redraw = true;
             }
         } else if (app_mode == MODE_TIMER && tmr_running) {
+            if (now_ms - last_ui_clock_update >= 500) {
+                needs_redraw = true;
+            }
+        } else if (app_mode == MODE_SLEEP && sleep_running) {
             if (now_ms - last_ui_clock_update >= 500) {
                 needs_redraw = true;
             }

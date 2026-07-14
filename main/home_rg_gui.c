@@ -12,6 +12,7 @@
 static adc_oneshot_unit_handle_t adc1_handle = NULL;
 static adc_cali_handle_t cali_handle = NULL;
 int home_ui_current_battery_pct = -1;
+float home_ui_current_battery_mv = 0;
 static float filtered_vbat = -1.0f;
 static uint32_t last_adc_time = 0;
 
@@ -69,8 +70,8 @@ typedef struct {
     int icon_radius[NUM_APPS];
     char time_text[8];
     char date_text[32];
+    int moon_phase_idx;
     char app_text[32];
-    char moon_text[16];
     bool need_time_refresh;
     bool need_app_text_refresh;
     bool needs_redraw;
@@ -92,7 +93,7 @@ static int get_battery_percentage(float voltage_mv) {
     return 0;
 }
 
-static void home_ui_update_battery(void) {
+void home_ui_update_battery(void) {
     if (!adc1_handle) return;
     int raw = 0;
     int total_raw = 0;
@@ -133,6 +134,7 @@ static void home_ui_update_battery(void) {
             home_ui_current_battery_pct = pct;
             home_ui.need_time_refresh = true; // Redraw battery along with time
         }
+        home_ui_current_battery_mv = filtered_vbat;
     }
 }
 
@@ -152,9 +154,8 @@ static void home_ui_update_clock(void) {
              days[wday], months[mon], tinfo->tm_mday, 1900 + tinfo->tm_year);
     
     int phase = (((long long)now - 592500) % 2551443) * 8 / 2551443;
-    const char *phases[] = {"NEW", "WAX CRES", "1ST QTR", "WAX GIB", "FULL", "WAN GIB", "3RD QTR", "WAN CRES"};
     if (phase >= 0 && phase < 8) {
-        snprintf(home_ui.moon_text, sizeof(home_ui.moon_text), "%s", phases[phase]);
+        home_ui.moon_phase_idx = phase;
     }
 
     home_ui.needs_redraw = true;
@@ -430,10 +431,37 @@ void home_ui_draw(void) {
                 rg_gui_draw_rect(bx + 1, by + 1, level_w, bh - 2, color);
             }
             
-            // Draw moon phase
-            rg_gui_set_font_size(8);
-            rg_gui_set_text_color(RG_COLOR_RGB(200, 200, 220));
-            rg_gui_draw_text_box(bx - 65, by + 1, 60, 12, RG_COLOR_BLACK, home_ui.moon_text);
+        }
+        
+        // Draw moon phase icon next to clock
+        int cx = TIME_BOX_X - 15;
+        int cy = TIME_BOX_Y + 15;
+        int r = 10;
+        int s_off = 4; // shadow offset for crescents
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dy = -r; dy <= r; dy++) {
+                int dist_sq = dx*dx + dy*dy;
+                if (dist_sq <= r*r) {
+                    uint16_t c = RG_COLOR_BLACK;
+                    int sq1 = (dx + s_off)*(dx + s_off) + dy*dy;
+                    int sq2 = (dx - s_off)*(dx - s_off) + dy*dy;
+                    
+                    if (home_ui.moon_phase_idx == 0) { c = RG_COLOR_BLACK; }
+                    else if (home_ui.moon_phase_idx == 4) { c = RG_COLOR_WHITE; }
+                    else if (home_ui.moon_phase_idx == 2) { c = (dx >= 0) ? RG_COLOR_WHITE : RG_COLOR_BLACK; }
+                    else if (home_ui.moon_phase_idx == 6) { c = (dx <= 0) ? RG_COLOR_WHITE : RG_COLOR_BLACK; }
+                    else if (home_ui.moon_phase_idx == 1) { c = (sq1 > r*r) ? RG_COLOR_WHITE : RG_COLOR_BLACK; }
+                    else if (home_ui.moon_phase_idx == 3) { c = (dx >= 0 || sq2 <= r*r) ? RG_COLOR_WHITE : RG_COLOR_BLACK; }
+                    else if (home_ui.moon_phase_idx == 5) { c = (dx <= 0 || sq1 <= r*r) ? RG_COLOR_WHITE : RG_COLOR_BLACK; }
+                    else if (home_ui.moon_phase_idx == 7) { c = (sq2 > r*r) ? RG_COLOR_WHITE : RG_COLOR_BLACK; }
+                    
+                    if (dist_sq >= (r-1)*(r-1)) {
+                         rg_gui_draw_rect(cx+dx, cy+dy, 1, 1, RG_COLOR_RGB(150, 150, 150)); // Outline
+                    } else {
+                         rg_gui_draw_rect(cx+dx, cy+dy, 1, 1, c);
+                    }
+                }
+            }
         }
         
         home_ui.need_time_refresh = false;

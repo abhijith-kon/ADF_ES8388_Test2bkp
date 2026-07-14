@@ -419,7 +419,6 @@ void app_main(void)
                     app_settings_start();
                 }
                 else if (selected == 6) { // APP_ALARM
-                    if (app_music_is_playing()) app_music_stop();
                     current_app = APP_ALARM;
                     app_alarm_start();
                 }
@@ -540,6 +539,9 @@ void app_main(void)
             app_files_tick();
         }
         else if (current_app == APP_ALARM) {
+            if (app_music_is_playing()) {
+                app_music_bg_tick();
+            }
             // UI updates handled inside app_alarm_tick or input
         }
         else if (current_app == APP_GAMES) {
@@ -563,6 +565,14 @@ void app_main(void)
 
         app_alarm_tick(); // Check and ring alarm across all apps
         neo_animation_tick(); // Run Neopixel animations across all apps
+
+        // Ensure background battery updating occurs
+        static int64_t last_bat_update = 0;
+        if (now_us / 1000 - last_bat_update >= 10000) {
+            last_bat_update = now_us / 1000;
+            home_ui_update_battery(); 
+        }
+
         vTaskDelay(1);
     }
 }

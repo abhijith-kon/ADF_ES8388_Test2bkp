@@ -38,6 +38,8 @@ static void neo_init() {
     led_strip_config_t strip_config = {
         .strip_gpio_num = 48,
         .max_leds = 1,
+        .led_model = LED_MODEL_WS2812,
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
     };
     led_strip_rmt_config_t rmt_config = {
         .resolution_hz = 10 * 1000 * 1000, 
@@ -293,6 +295,13 @@ static void draw_settings_ui(bool full_refresh)
         // Top status dynamic elements
         snprintf(buf, sizeof(buf), "BAT:%d%% SD:OK", home_ui_current_battery_pct);
         rg_gui_draw_text(110, 4, buf, APP_BG, AMBER);
+
+        // Battery Time Estimation Overlay
+        float total_hours = (home_ui_current_battery_pct / 100.0f) * 12.0f; // Assuming 12hr total battery life
+        int h_left = (int)total_hours;
+        int m_left = (int)((total_hours - h_left) * 60.0f);
+        snprintf(buf, sizeof(buf), "PWR: %d%% (%dh %dm left)", home_ui_current_battery_pct, h_left, m_left);
+        rg_gui_draw_text(6, 272, buf, NEON, APP_BG);
 
     } else if (current_view == 2) { // Neopixel UI
         uint16_t NEON = RG_COLOR_RGB(57, 255, 20);

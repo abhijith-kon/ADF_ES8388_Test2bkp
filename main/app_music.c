@@ -31,8 +31,13 @@
 
 static const char *TAG = "APP_MUSIC";
 
-#define MAX_PLAYLIST_FILES 1000
+#define MAX_PLAYLIST_FILES 5000
 static char **playlist = NULL;
+static char **master_playlist = NULL;
+static int total_master_tracks = 0;
+static char m3u_files[10][64];
+static int num_m3u_files = 0;
+static int current_playlist_idx = -1;
 static int total_tracks = 0;
 static int current_track = 0;
 static bool music_initialized = false;
@@ -128,7 +133,12 @@ static int info_channels = 2;
 static int info_bitrate = 320;
 static char info_format_str[16] = "MP3";
 static char info_artist_str[64] = "Unknown Artist";
+static char info_album_str[128] = "Unknown Album";
+static char info_genre_str[64] = "Unknown Genre";
 static char info_title_str[128] = "";
+static int flac_bitrate = 0;
+static bool is_sleep_mode = false;
+static char sleep_track_path[300] = "";
 static int64_t saved_byte_pos = 0;
 static bool is_shuffle = false;
 static bool show_thumbnail = false;
@@ -236,8 +246,10 @@ static void sd_card_scan_task(void *arg)
     while ((ent = readdir(dir)) != NULL) {
         if (is_supported_audio_file(ent->d_name)) {
             if (playlist_mutex) xSemaphoreTake(playlist_mutex, portMAX_DELAY);
-            if (total_tracks < MAX_PLAYLIST_FILES) {
-                playlist[total_tracks] = strdup(ent->d_name);
+            if (total_master_tracks < MAX_PLAYLIST_FILES) {
+                master_playlist[total_master_tracks] = strdup(ent->d_name);
+                playlist[total_master_tracks] = master_playlist[total_master_tracks];
+                total_master_tracks++;
                 total_tracks++;
             }
             int cur_count = total_tracks;
@@ -252,10 +264,16 @@ static void sd_card_scan_task(void *arg)
             if (cur_count % 10 == 0) {
                 vTaskDelay(pdMS_TO_TICKS(10));
             }
+        } else if (strstr(ent->d_name, ".m3u") != NULL) {
+            if (num_m3u_files < 10) {
+                strncpy(m3u_files[num_m3u_files], ent->d_name, 63);
+                m3u_files[num_m3u_files][63] = '\0';
+                num_m3u_files++;
+            }
         }
     }
     closedir(dir);
-    ESP_LOGI(TAG, "Background scan finished. Total audio tracks found: %d", total_tracks);
+    ESP_LOGI(TAG, "Background scan finished. Total master tracks found: %d, Playlists: %d", total_master_tracks, num_m3u_files);
     scan_in_progress = false;
     vTaskDelete(NULL);
 }
@@ -275,7 +293,7 @@ static int decoder_write_cb(audio_element_handle_t el, char *buffer, int len, Ti
     if (++cnt % 100 == 0) {
         ESP_LOGI(TAG, "decoder callback %d bytes", len);
     }
-    if (!show_thumbnail && fft_ringbuf && len > 0) {
+    if (in_player_ui && !show_thumbnail && fft_ringbuf && len > 0) {
         int avail_fill = rb_bytes_filled(fft_ringbuf);
         if (avail_fill + len > 4000) {
             char dummy[512];
@@ -530,15 +548,26 @@ static void draw_mini_player(void)
 
 static void draw_music_header(void)
 {
-    rg_gui_draw_rect(0, 0, SCREEN_W, SEP1_Y, MUSIC_BG);
+    rg_gui_draw_rect(0, 0, SCREEN_W, LIST_Y, MUSIC_BG);
     rg_gui_set_font_size(16);
     rg_gui_set_text_color(RG_COLOR_WHITE);
-    rg_gui_draw_text_box(0, TITLE_Y, SCREEN_W, TITLE_H, MUSIC_BG, "MUSIC");
-    if (is_shuffle) {
-        rg_gui_set_font_size(16);
-        rg_gui_draw_text(216, 4, "S", RG_COLOR_RGB(180, 100, 255), MUSIC_BG);
+
+    if (current_playlist_idx == -1) {
+        rg_gui_draw_text_box(0, 10, SCREEN_W, 20, MUSIC_BG, "MUSIC LIBRARY");
+    } else {
+        char pl_title[128];
+        snprintf(pl_title, sizeof(pl_title), "PL: %s", m3u_files[current_playlist_idx]);
+        // Remove .m3u extension for display if possible
+        char *ext = strstr(pl_title, ".m3u");
+        if (ext) *ext = '\0';
+        rg_gui_draw_text_box(0, 10, SCREEN_W, 20, MUSIC_BG, pl_title);
     }
-    rg_gui_draw_rect(0, SEP1_Y, SCREEN_W, 1, SEP_COLOR);
+    
+    char trk_str[32];
+    snprintf(trk_str, sizeof(trk_str), "%d TRACKS", total_tracks);
+    rg_gui_set_font_size(8);
+    rg_gui_set_text_color(RG_COLOR_RGB(150, 150, 150));
+    rg_gui_draw_text_box(0, 26, SCREEN_W, 10, MUSIC_BG, trk_str);
 }
 
 static void draw_music_full_ui(void)
@@ -609,7 +638,7 @@ static void draw_player_title(void)
     snprintf(display, sizeof(display), "%.*s", max_chars, clean_name + ofs);
     
     rg_gui_set_font_size(16);
-    rg_gui_draw_text_line(0, 16, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, left_pad);
+    rg_gui_draw_text_line(0, 8, SCREEN_W, 24, MUSIC_BG, RG_COLOR_WHITE, display, left_pad);
 }
 
 static int artist_scroll = 0;
@@ -636,13 +665,24 @@ static void draw_player_metadata(void)
     char display[80];
     snprintf(display, sizeof(display), " %.*s", 30, artist);
 
-    rg_gui_draw_rect(0, 50, SCREEN_W, 16, MUSIC_BG);
+    rg_gui_draw_rect(0, 42, SCREEN_W, 16, MUSIC_BG);
     rg_gui_set_font_size(8);
-    rg_gui_draw_text_line(0, 50, SCREEN_W, 16, MUSIC_BG, RG_COLOR_RGB(200, 200, 210), display, 8);
+    rg_gui_draw_text_line(0, 42, SCREEN_W, 16, MUSIC_BG, RG_COLOR_RGB(200, 200, 210), display, 8);
 
-    rg_gui_draw_rect(0, 72, SCREEN_W, 16, MUSIC_BG);
+    const char *album = info_album_str;
+    char album_disp[100];
+    if (strcmp(info_genre_str, "Unknown Genre") != 0 && strlen(info_genre_str) > 0) {
+        snprintf(album_disp, sizeof(album_disp), " %.*s [%.15s]", 20, album, info_genre_str);
+    } else {
+        snprintf(album_disp, sizeof(album_disp), " %.*s", 30, album);
+    }
+    rg_gui_draw_rect(0, 60, SCREEN_W, 16, MUSIC_BG);
+    rg_gui_set_font_size(8);
+    rg_gui_draw_text_line(0, 60, SCREEN_W, 16, MUSIC_BG, RG_COLOR_RGB(150, 150, 160), album_disp, 8);
+
+    rg_gui_draw_rect(0, 80, SCREEN_W, 16, MUSIC_BG);
     rg_gui_set_text_color(RG_COLOR_WHITE);
-    rg_gui_draw_text_center(SCREEN_W / 2, 72, fmt_str);
+    rg_gui_draw_text_center(SCREEN_W / 2, 80, fmt_str);
 }
 
 static void draw_player_timer(void)
@@ -651,14 +691,19 @@ static void draw_player_timer(void)
     float prog = get_playback_progress();
     int tot_sec = (info_bitrate > 0) ? (int)((current_track_bytes * 8ULL) / (info_bitrate * 1000ULL)) : 0;
     int cur_sec = (int)(prog * tot_sec);
-    char time_str[32];
+    char time_str[40];
     snprintf(time_str, sizeof(time_str), "%02d:%02d / %02d:%02d",
              cur_sec / 60, cur_sec % 60, tot_sec / 60, tot_sec % 60);
 
-    rg_gui_draw_rect(0, 90, SCREEN_W, 20, MUSIC_BG);
+    rg_gui_draw_rect(0, 98, SCREEN_W, 20, MUSIC_BG);
     rg_gui_set_font_size(8);
     rg_gui_set_text_color(RG_COLOR_WHITE);
-    rg_gui_draw_text_center(SCREEN_W / 2, 96, time_str);
+    int txt_w = strlen(time_str) * 8;
+    int txt_x = (SCREEN_W - txt_w) / 2;
+    rg_gui_draw_text(txt_x, 104, time_str, RG_COLOR_WHITE, MUSIC_BG);
+    if (is_shuffle) {
+        rg_gui_draw_text(txt_x + txt_w + 4, 104, "S", RG_COLOR_RGB(180, 100, 255), MUSIC_BG);
+    }
 }
 
 static void draw_player_top_area(bool full_redraw)
@@ -667,16 +712,8 @@ static void draw_player_top_area(bool full_redraw)
         rg_gui_draw_rect(0, 0, SCREEN_W, 123, MUSIC_BG);
         rg_gui_draw_rect(0, 124, SCREEN_W, 1, SEP_COLOR);
     }
-    rg_gui_draw_rect(0, 0, SCREEN_W, 14, MUSIC_BG);
-    rg_gui_set_font_size(8);
-    rg_gui_set_text_color(RG_COLOR_WHITE);
-    rg_gui_set_fill_color(MUSIC_BG);
-    rg_gui_draw_text_center(SCREEN_W / 2, 4, "NOW PLAYING");
-    if (is_shuffle) {
-        rg_gui_set_font_size(8);
-        rg_gui_draw_text(220, 3, "S", RG_COLOR_RGB(180, 100, 255), MUSIC_BG);
-        rg_gui_set_text_color(RG_COLOR_WHITE);
-    }
+    rg_gui_draw_rect(0, 0, SCREEN_W, 8, MUSIC_BG);
+    
     draw_player_title();
     draw_player_metadata();
     draw_player_timer();
@@ -1185,7 +1222,12 @@ static void play_track(int index)
         strcpy(info_format_str, "MP3");
     }
 
+    info_sample_rate = 44100;
+    info_bitrate = 128;
     strcpy(info_artist_str, "Unknown Artist");
+    strcpy(info_album_str, "Unknown Album");
+    strcpy(info_genre_str, "Unknown Genre");
+    flac_bitrate = 0;
     info_title_str[0] = '\0';
     const char *dash = strstr(playlist[index], " - ");
     if (dash && (dash - playlist[index] < sizeof(info_artist_str))) {
@@ -1211,13 +1253,89 @@ static void play_track(int index)
             bool has_id3 = false;
             bool has_apic = false;
             uint32_t id3_size = 0;
-            if (fread(hdr, 1, 10, f) == 10 &&
-                hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3') {
-                has_id3 = true;
-                id3_size = ((uint32_t)(hdr[6] & 0x7F) << 21) |
-                           ((uint32_t)(hdr[7] & 0x7F) << 14) |
-                           ((uint32_t)(hdr[8] & 0x7F) << 7)  |
-                           ((uint32_t)(hdr[9] & 0x7F));
+            if (fread(hdr, 1, 10, f) == 10) {
+                if (hdr[0] == 'f' && hdr[1] == 'L' && hdr[2] == 'a' && hdr[3] == 'C') {
+                    has_id3 = true; // skip ID3 fallback
+                    uint32_t pos = 4;
+                    while (1) {
+                        if (fseek(f, pos, SEEK_SET) != 0) break;
+                        uint8_t blk_hdr[4];
+                        if (fread(blk_hdr, 1, 4, f) != 4) break;
+                        bool is_last = (blk_hdr[0] & 0x80) != 0;
+                        uint8_t type = blk_hdr[0] & 0x7F;
+                        uint32_t length = ((uint32_t)blk_hdr[1] << 16) | ((uint32_t)blk_hdr[2] << 8) | blk_hdr[3];
+                        if (type == 0 && length == 34) {
+                            uint8_t sinfo[34];
+                            if (fread(sinfo, 1, 34, f) == 34) {
+                                uint32_t sr = ((uint32_t)sinfo[10] << 12) | ((uint32_t)sinfo[11] << 4) | (sinfo[12] >> 4);
+                                uint64_t ts = ((uint64_t)(sinfo[13] & 0x0F) << 32) | ((uint32_t)sinfo[14] << 24) | ((uint32_t)sinfo[15] << 16) | ((uint32_t)sinfo[16] << 8) | sinfo[17];
+                                if (sr > 0 && ts > 0) {
+                                    int dur = ts / sr;
+                                    if (dur > 0) flac_bitrate = (current_track_bytes * 8) / dur / 1000;
+                                }
+                            }
+                        } else if (type == 4) {
+                            uint8_t vlen_buf[4];
+                            if (fread(vlen_buf, 1, 4, f) == 4) {
+                                uint32_t vlen = vlen_buf[0] | (vlen_buf[1] << 8) | (vlen_buf[2] << 16) | (vlen_buf[3] << 24);
+                                if (fseek(f, vlen, SEEK_CUR) == 0) {
+                                    uint8_t llen_buf[4];
+                                    if (fread(llen_buf, 1, 4, f) == 4) {
+                                        uint32_t llen = llen_buf[0] | (llen_buf[1] << 8) | (llen_buf[2] << 16) | (llen_buf[3] << 24);
+                                        for (uint32_t i = 0; i < llen; i++) {
+                                            uint8_t clen_buf[4];
+                                            if (fread(clen_buf, 1, 4, f) != 4) break;
+                                            uint32_t clen = clen_buf[0] | (clen_buf[1] << 8) | (clen_buf[2] << 16) | (clen_buf[3] << 24);
+                                            if (clen > 1024) { fseek(f, clen, SEEK_CUR); continue; }
+                                            char *cmt = malloc(1025);
+                                            if (!cmt) { fseek(f, clen, SEEK_CUR); continue; }
+                                            if (fread(cmt, 1, clen, f) == clen) {
+                                                cmt[clen] = '\0';
+                                                if (strncasecmp(cmt, "TITLE=", 6) == 0) {
+                                                    strncpy(info_title_str, cmt + 6, sizeof(info_title_str)-1); info_title_str[sizeof(info_title_str)-1] = '\0';
+                                                } else if (strncasecmp(cmt, "ARTIST=", 7) == 0) {
+                                                    strncpy(info_artist_str, cmt + 7, sizeof(info_artist_str)-1); info_artist_str[sizeof(info_artist_str)-1] = '\0';
+                                                } else if (strncasecmp(cmt, "ALBUM=", 6) == 0) {
+                                                    strncpy(info_album_str, cmt + 6, sizeof(info_album_str)-1); info_album_str[sizeof(info_album_str)-1] = '\0';
+                                                } else if (strncasecmp(cmt, "GENRE=", 6) == 0) {
+                                                    strncpy(info_genre_str, cmt + 6, sizeof(info_genre_str)-1); info_genre_str[sizeof(info_genre_str)-1] = '\0';
+                                                }
+                                            }
+                                            free(cmt);
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (type == 6) {
+                            has_apic = true;
+                            uint8_t phdr[8];
+                            if (length >= 32 && fread(phdr, 1, 8, f) == 8) {
+                                uint32_t mlen = (phdr[4] << 24) | (phdr[5] << 16) | (phdr[6] << 8) | phdr[7];
+                                if (fseek(f, pos + 4 + 8 + mlen, SEEK_SET) == 0) {
+                                    uint8_t dlen_buf[4];
+                                    if (fread(dlen_buf, 1, 4, f) == 4) {
+                                        uint32_t dlen = (dlen_buf[0] << 24) | (dlen_buf[1] << 16) | (dlen_buf[2] << 8) | dlen_buf[3];
+                                        if (fseek(f, pos + 4 + 28 + mlen + dlen, SEEK_SET) == 0) {
+                                            uint8_t plen_buf[4];
+                                            if (fread(plen_buf, 1, 4, f) == 4) {
+                                                uint32_t plen = (plen_buf[0] << 24) | (plen_buf[1] << 16) | (plen_buf[2] << 8) | plen_buf[3];
+                                                current_apic_offset = pos + 4 + 32 + mlen + dlen;
+                                                current_apic_size = plen;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        pos += 4 + length;
+                        if (is_last) break;
+                    }
+                } else if (hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3') {
+                    has_id3 = true;
+                    id3_size = ((uint32_t)(hdr[6] & 0x7F) << 21) |
+                               ((uint32_t)(hdr[7] & 0x7F) << 14) |
+                               ((uint32_t)(hdr[8] & 0x7F) << 7)  |
+                               ((uint32_t)(hdr[9] & 0x7F));
                 
                 uint32_t pos = 10;
                 if (hdr[5] & 0x40) { // Extended header
@@ -1265,14 +1383,14 @@ static void play_track(int index)
                         } else {
                             ESP_LOGW(TAG, "Failed to read %lu bytes of APIC tag", (unsigned long)read_len);
                         }
-                    } else if ((strcmp(id, "TPE1") == 0 || strcmp(id, "TIT2") == 0) && f_size > 1 && f_size < 1024) {
+                    } else if ((strcmp(id, "TPE1") == 0 || strcmp(id, "TIT2") == 0 || strcmp(id, "TALB") == 0 || strcmp(id, "TCON") == 0) && f_size > 1 && f_size < 1024) {
                         uint8_t tag_buf[256];
                         uint32_t r_len = f_size < sizeof(tag_buf) ? f_size : sizeof(tag_buf);
                         if (fread(tag_buf, 1, r_len, f) == r_len) {
                             if (f_size > r_len) fseek(f, f_size - r_len, SEEK_CUR);
                             uint8_t enc = tag_buf[0];
-                            char *dest = (strcmp(id, "TPE1") == 0) ? info_artist_str : info_title_str;
-                            int max_len = (strcmp(id, "TPE1") == 0) ? 60 : 120;
+                            char *dest = (strcmp(id, "TPE1") == 0) ? info_artist_str : ((strcmp(id, "TIT2") == 0) ? info_title_str : ((strcmp(id, "TALB") == 0) ? info_album_str : info_genre_str));
+                            int max_len = (strcmp(id, "TPE1") == 0) ? 60 : ((strcmp(id, "TIT2") == 0) ? 120 : ((strcmp(id, "TALB") == 0) ? 120 : 60));
                             int out_idx = 0;
                             if (enc == 0 || enc == 3) {
                                 for (uint32_t k = 1; k < r_len && out_idx < max_len; k++) {
@@ -1296,8 +1414,9 @@ static void play_track(int index)
                     pos += 10 + f_size;
                 }
             }
+        }
 
-            if (!has_id3 || strcmp(info_artist_str, "Unknown Artist") == 0 || info_title_str[0] == '\0') {
+        if (!has_id3 || strcmp(info_artist_str, "Unknown Artist") == 0 || info_title_str[0] == '\0') {
                 fseek(f, 0, SEEK_SET);
                 uint32_t fb_len = 8192;
                 uint8_t *fb_buf = malloc(fb_len);
@@ -1375,6 +1494,7 @@ void app_music_start(void)
         }
         if (!playlist) {
             playlist = calloc(MAX_PLAYLIST_FILES, sizeof(char *));
+            master_playlist = calloc(MAX_PLAYLIST_FILES, sizeof(char *));
         }
         xTaskCreate(sd_card_scan_task, "sd_scan_task", 4096, NULL, 5, NULL);
         while (scan_in_progress && total_tracks < 100) {
@@ -1411,6 +1531,7 @@ void app_music_stop(void)
     if (fft_ringbuf) {
         rb_reset(fft_ringbuf);
     }
+    is_sleep_mode = false;
 }
 
 void app_music_hide(void)
@@ -1422,6 +1543,33 @@ void app_music_hide(void)
 bool app_music_is_playing(void)
 {
     return is_playing;
+}
+
+void app_music_play_sleep_ambience(const char *filename)
+{
+    if (!filename) return;
+    
+    snprintf(sleep_track_path, sizeof(sleep_track_path), "/sdcard/sleep/%s", filename);
+
+    if (is_playing) {
+        app_music_stop();
+    }
+    if (!pipeline) {
+        init_audio_pipeline();
+    }
+
+    audio_pipeline_stop(pipeline);
+    audio_pipeline_wait_for_stop(pipeline);
+    audio_pipeline_terminate(pipeline);
+    audio_pipeline_reset_ringbuffer(pipeline);
+    audio_pipeline_reset_elements(pipeline);
+
+    audio_element_set_uri(fatfs_stream_reader, sleep_track_path);
+    audio_pipeline_run(pipeline);
+    is_playing = true;
+    pipeline_has_run = true;
+    is_sleep_mode = true;
+    ESP_LOGI(TAG, "Playing sleep ambience: %s", sleep_track_path);
 }
 
 static void pause_current_track(void)
@@ -1644,6 +1792,47 @@ void app_music_handle_input(button_event_t event)
             }
             break;
         case BTN_B:
+            if (!in_player_ui && num_m3u_files > 0) {
+                current_playlist_idx++;
+                if (current_playlist_idx >= num_m3u_files) {
+                    current_playlist_idx = -1;
+                }
+                
+                if (playlist_mutex) xSemaphoreTake(playlist_mutex, portMAX_DELAY);
+                if (current_playlist_idx == -1) {
+                    total_tracks = total_master_tracks;
+                    for (int i = 0; i < total_tracks; i++) {
+                        playlist[i] = master_playlist[i];
+                    }
+                } else {
+                    char path[128];
+                    snprintf(path, sizeof(path), "/sdcard/%s", m3u_files[current_playlist_idx]);
+                    FILE *f = fopen(path, "r");
+                    total_tracks = 0;
+                    if (f) {
+                        char line[128];
+                        while (fgets(line, sizeof(line), f) && total_tracks < MAX_PLAYLIST_FILES) {
+                            line[strcspn(line, "\r\n")] = 0;
+                            if (line[0] == '#' || strlen(line) < 4) continue;
+                            for (int i = 0; i < total_master_tracks; i++) {
+                                if (strcasecmp(master_playlist[i], line) == 0) {
+                                    playlist[total_tracks++] = master_playlist[i];
+                                    break;
+                                }
+                            }
+                        }
+                        fclose(f);
+                    }
+                }
+                if (current_track >= total_tracks && total_tracks > 0) current_track = 0;
+                selected_index = 0;
+                scroll_char_offset = 0;
+                scroll_timer = esp_timer_get_time() / 1000;
+                if (playlist_mutex) xSemaphoreGive(playlist_mutex);
+                
+                list_full_dirty = true;
+                draw_music_full_ui();
+            }
             break;
         case BTN_VOL_UP:
             {
@@ -1691,7 +1880,7 @@ void app_music_bg_tick(void)
                 if (music_info.bps > 0) {
                     info_bitrate = music_info.bps / 1000;
                 } else if (strcmp(info_format_str, "FLAC") == 0) {
-                    info_bitrate = 850;
+                    info_bitrate = (flac_bitrate > 0) ? flac_bitrate : 850;
                 } else if (strcmp(info_format_str, "WAV") == 0) {
                     info_bitrate = (info_sample_rate * info_bits * info_channels) / 1000;
                 } else {
@@ -1710,16 +1899,27 @@ void app_music_bg_tick(void)
                     int64_t now_ms = esp_timer_get_time() / 1000;
                     if (now_ms - last_auto_advance >= 1500) {
                         last_auto_advance = now_ms;
-                        ESP_LOGI(TAG, "Element finished/stopped (source=%p, status=%d), auto-advancing to next track", msg.source, (int)msg.data);
-                        current_track = get_next_track_idx();
-                        play_track(current_track);
-                        selected_index = current_track;
-                        ensure_cursor_visible();
-                        scroll_char_offset = 0;
-                        if (in_player_ui) {
-                            player_scroll_char_offset = 0;
-                            player_scroll_timer = now_ms;
-                            draw_player_ui_full();
+                        ESP_LOGI(TAG, "Element finished/stopped (source=%p, status=%d)", msg.source, (int)msg.data);
+                        if (is_sleep_mode) {
+                            audio_pipeline_stop(pipeline);
+                            audio_pipeline_wait_for_stop(pipeline);
+                            audio_pipeline_terminate(pipeline);
+                            audio_pipeline_reset_ringbuffer(pipeline);
+                            audio_pipeline_reset_elements(pipeline);
+                            audio_element_set_uri(fatfs_stream_reader, sleep_track_path);
+                            audio_pipeline_run(pipeline);
+                            ESP_LOGI(TAG, "Looping sleep track.");
+                        } else {
+                            current_track = get_next_track_idx();
+                            play_track(current_track);
+                            selected_index = current_track;
+                            ensure_cursor_visible();
+                            scroll_char_offset = 0;
+                            if (in_player_ui) {
+                                player_scroll_char_offset = 0;
+                                player_scroll_timer = now_ms;
+                                draw_player_ui_full();
+                            }
                         }
                     }
                 }
