@@ -55,7 +55,10 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **Sci-Fi System Diagnostic UI:** Completely redesigned the System Status view into an amber-and-black industrial diagnostic terminal featuring live Core Temperature, Uptime, Memory blocks, and Storage stats.
 - **WAP Upload Routing:** The Web UI now features a dropdown menu to dynamically route uploaded files to the `/sdcard/` Root folder (for music/txt) or the `/sdcard/OTA/` folder (for firmware binaries).
 - **Smoother Pong:** Added rotary encoder support to the Pong game and smoothed out the paddle movement increments.
-### Version 23 (Latest)
+### Version 24 (Latest)
+- **Wi-Fi AP Smartphone Compatibility**: Upgraded the OTA Web AP from an OPEN network to WPA2-PSK (`Password: retro123`) and explicitly disabled Protected Management Frames (PMF). This prevents modern iOS and Android devices from aggressively disconnecting or refusing to connect to the AP due to a lack of internet access.
+
+### Version 23 Updates
 - **FLAC Support Enhancements**: Added robust native FLAC metadata parsing (`STREAMINFO`, `VORBIS_COMMENT`, `PICTURE`). FLAC files now accurately display Title, Artist, Album, Genre, and Album Art (Baseline JPEG/PNG) natively, alongside a dynamically calculated accurate average bitrate.
 - **Sleep Timer & Ambience Playback**: The Alarm app now features a fully functional sleep timer with an integrated Ambience player. You can choose an ambience track, set a timer (e.g., 30 mins, 1 hour), and the background music/ambience will automatically stop playing when the timer expires.
 - **Battery Life Estimation**: Upgraded the Settings UI to not only display battery percentage but also intelligently estimate remaining battery life in hours and minutes (`BAT: 80% (9h 36m left)`) dynamically.
