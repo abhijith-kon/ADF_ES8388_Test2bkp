@@ -55,6 +55,7 @@ static audio_event_iface_handle_t evt = NULL;
 static audio_hal_handle_t music_hal_handle = NULL;
 extern int global_volume;
 extern void global_volume_set(int vol);
+extern void global_hardware_mute(bool mute);
 
 // ---- Layout Constants ----
 #define SCREEN_W         240
@@ -1190,6 +1191,7 @@ static void play_track(int index)
 {
     if (index < 0 || index >= total_tracks) return;
 
+    global_hardware_mute(true);
     if (pipeline_has_run) {
         audio_pipeline_stop(pipeline);
         audio_pipeline_wait_for_stop(pipeline);
@@ -1465,6 +1467,9 @@ static void play_track(int index)
     }
 
     audio_pipeline_run(pipeline);
+    vTaskDelay(pdMS_TO_TICKS(100)); // Give I2S and DAC time to stabilize before unmute
+    global_hardware_mute(false);
+    
     pipeline_has_run = true;
     is_playing = true;
     current_track = index;
@@ -1519,6 +1524,7 @@ void app_music_stop(void)
         vis_buf = NULL;
     }
     if (pipeline && pipeline_has_run) {
+        global_hardware_mute(true);
         audio_pipeline_stop(pipeline);
         audio_pipeline_wait_for_stop(pipeline);
         audio_pipeline_terminate(pipeline);
@@ -1551,6 +1557,7 @@ void app_music_play_sleep_ambience(const char *filename)
     snprintf(sleep_track_path, sizeof(sleep_track_path), "/sdcard/sleep/%s", filename);
 
     if (is_playing) {
+        global_hardware_mute(true);
         app_music_stop();
     }
     if (!pipeline) {
@@ -1565,6 +1572,8 @@ void app_music_play_sleep_ambience(const char *filename)
 
     audio_element_set_uri(fatfs_stream_reader, sleep_track_path);
     audio_pipeline_run(pipeline);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    global_hardware_mute(false);
     is_playing = true;
     pipeline_has_run = true;
     is_sleep_mode = true;
@@ -1574,6 +1583,8 @@ void app_music_play_sleep_ambience(const char *filename)
 static void pause_current_track(void)
 {
     if (!is_playing) return;
+    global_hardware_mute(true);
+    vTaskDelay(pdMS_TO_TICKS(50)); // let DAC fade out or mute cleanly
     audio_pipeline_pause(pipeline);
     is_playing = false;
     player_dirty = true;
@@ -1584,6 +1595,8 @@ static void resume_current_track(void)
 {
     if (is_playing || !pipeline_has_run) return;
     audio_pipeline_resume(pipeline);
+    vTaskDelay(pdMS_TO_TICKS(50)); // wait for valid PCM to reach DAC
+    global_hardware_mute(false);
     is_playing = true;
     player_dirty = true;
     ESP_LOGI(TAG, "Resumed track via audio_pipeline_resume");

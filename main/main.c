@@ -114,6 +114,12 @@ void global_volume_set(int vol) {
     // Hardware volume is fixed to 100, volume is handled in software.
 }
 
+void global_hardware_mute(bool mute) {
+    if (s_hal) {
+        audio_hal_set_mute(s_hal, mute);
+    }
+}
+
 typedef enum {
     APP_HOME,
     APP_FILES,
@@ -268,6 +274,8 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Starting Retro Console OS...");
 
+    rtc_sync_from_ds3231();
+
     board_handle = audio_board_init();
     if (board_handle) {
         audio_hal_ctrl_codec(board_handle->audio_hal, AUDIO_HAL_CODEC_MODE_BOTH, AUDIO_HAL_CTRL_START);
@@ -275,7 +283,6 @@ void app_main(void)
         s_hal = board_handle->audio_hal;
         audio_hal_set_volume(s_hal, 70); // Lock hardware volume to 70 (new 100% limit)
         es8388_fix_output_mixer();
-        rtc_sync_from_ds3231();
     } else {
         ESP_LOGE(TAG, "Audio board init failed!");
     }

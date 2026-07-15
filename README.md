@@ -55,8 +55,11 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **Sci-Fi System Diagnostic UI:** Completely redesigned the System Status view into an amber-and-black industrial diagnostic terminal featuring live Core Temperature, Uptime, Memory blocks, and Storage stats.
 - **WAP Upload Routing:** The Web UI now features a dropdown menu to dynamically route uploaded files to the `/sdcard/` Root folder (for music/txt) or the `/sdcard/OTA/` folder (for firmware binaries).
 - **Smoother Pong:** Added rotary encoder support to the Pong game and smoothed out the paddle movement increments.
-### Version 24 (Latest)
-- **Wi-Fi AP Smartphone Compatibility**: Upgraded the OTA Web AP from an OPEN network to WPA2-PSK (`Password: retro123`) and explicitly disabled Protected Management Frames (PMF). This prevents modern iOS and Android devices from aggressively disconnecting or refusing to connect to the AP due to a lack of internet access.
+### Version 25 (Latest)
+- **RTC Hardware Sync Order Fix**: Resolved a critical I2C bus contention issue where the audio driver's repeated ES8388 I2C timeouts caused the DS3231 RTC initialization to fail with `err=259`. By moving the RTC sync sequence *before* the audio board initialization in the boot sequence, the DS3231 now reliably syncs the system time immediately on power-up.
+- **I2C Diagnostics & Muting**: Discovered that generic ES8388 breakout boards without proper chip enable (CE) logic silently ignore I2C initialization commands (NACKs), causing the hardware mixer and new hardware muting commands to fail. Playback continues via I2S, but the lack of I2C control results in audible pops during track transitions.
+
+### Version 24
 
 ### Version 23 Updates
 - **FLAC Support Enhancements**: Added robust native FLAC metadata parsing (`STREAMINFO`, `VORBIS_COMMENT`, `PICTURE`). FLAC files now accurately display Title, Artist, Album, Genre, and Album Art (Baseline JPEG/PNG) natively, alongside a dynamically calculated accurate average bitrate.
