@@ -35,9 +35,14 @@ static const char *TAG = "APP_MUSIC";
 static char **playlist = NULL;
 static char **master_playlist = NULL;
 static int total_master_tracks = 0;
-static char m3u_files[10][64];
+static char m3u_files[30][64];
 static int num_m3u_files = 0;
 static int current_playlist_idx = -1;
+
+#define MAX_GENRES 20
+static char genre_names[MAX_GENRES][32];
+static int num_genres = 0;
+static uint8_t track_genre_idx[MAX_PLAYLIST_FILES];
 static int total_tracks = 0;
 static int current_track = 0;
 static bool music_initialized = false;
@@ -232,6 +237,89 @@ static bool is_supported_audio_file(const char *name)
     return false;
 }
 
+static void get_fast_genre(const char *path, char *out_genre) {
+    out_genre[0] = '\0';
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    uint8_t hdr[10];
+    if (fread(hdr, 1, 10, f) != 10) { fclose(f); return; }
+    if (hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3') {
+        uint32_t id3_size = ((uint32_t)(hdr[6] & 0x7F) << 21) | ((uint32_t)(hdr[7] & 0x7F) << 14) | ((uint32_t)(hdr[8] & 0x7F) << 7) | (hdr[9] & 0x7F);
+        uint32_t pos = 10;
+        if (hdr[5] & 0x40) {
+            uint8_t ext[4]; if (fread(ext, 1, 4, f) == 4) {
+                uint32_t extsz = (ext[0]<<24)|(ext[1]<<16)|(ext[2]<<8)|ext[3];
+                if (hdr[3] == 4) extsz = ((ext[0]&0x7F)<<21)|((ext[1]&0x7F)<<14)|((ext[2]&0x7F)<<7)|(ext[3]&0x7F);
+                pos += extsz;
+            }
+        }
+        while (pos + 10 <= 10 + id3_size) {
+            if (fseek(f, pos, SEEK_SET) != 0 || fread(hdr, 1, 10, f) != 10) break;
+            uint32_t f_sz = (hdr[4]<<24)|(hdr[5]<<16)|(hdr[6]<<8)|hdr[7];
+            if (hdr[3] == 4) f_sz = ((hdr[4]&0x7F)<<21)|((hdr[5]&0x7F)<<14)|((hdr[6]&0x7F)<<7)|(hdr[7]&0x7F);
+            if (f_sz == 0 || pos + 10 + f_sz > 10 + id3_size) break;
+            if (hdr[0]=='T' && hdr[1]=='C' && hdr[2]=='O' && hdr[3]=='N' && f_sz > 1 && f_sz < 256) {
+                uint8_t tbuf[256];
+                if (fread(tbuf, 1, f_sz, f) == f_sz) {
+                    uint8_t enc = tbuf[0];
+                    int out_idx = 0;
+                    if (enc == 0 || enc == 3) {
+                        for(uint32_t k=1; k<f_sz && out_idx<31; k++) {
+                            if (tbuf[k]=='\0') break;
+                            if (tbuf[k]>=32) out_genre[out_idx++] = (char)tbuf[k];
+                        }
+                    } else if (enc == 1 || enc == 2) {
+                        uint32_t start_k = (enc == 1 && f_sz >= 3) ? 3 : 1;
+                        for(uint32_t k=start_k; k+1<f_sz && out_idx<31; k+=2) {
+                            char c = (char)tbuf[enc==2 ? k+1 : k];
+                            if (c=='\0' && tbuf[k+1]=='\0') break;
+                            if ((unsigned char)c>=32 && tbuf[enc==2?k:k+1]==0) out_genre[out_idx++] = c;
+                        }
+                    }
+                    out_genre[out_idx] = '\0';
+                }
+                break;
+            }
+            pos += 10 + f_sz;
+        }
+    } else if (hdr[0] == 'f' && hdr[1] == 'L' && hdr[2] == 'a' && hdr[3] == 'C') {
+        uint32_t pos = 4;
+        while (1) {
+            if (fseek(f, pos, SEEK_SET) != 0) break;
+            uint8_t bhdr[4]; if (fread(bhdr, 1, 4, f) != 4) break;
+            bool is_last = (bhdr[0] & 0x80) != 0;
+            uint8_t type = bhdr[0] & 0x7F;
+            uint32_t length = (bhdr[1]<<16)|(bhdr[2]<<8)|bhdr[3];
+            if (type == 4) {
+                uint8_t vbuf[4]; if (fread(vbuf,1,4,f)==4) {
+                    uint32_t vlen = vbuf[0]|(vbuf[1]<<8)|(vbuf[2]<<16)|(vbuf[3]<<24);
+                    if (fseek(f, vlen, SEEK_CUR) == 0) {
+                        uint8_t lbuf[4]; if (fread(lbuf,1,4,f)==4) {
+                            uint32_t llen = lbuf[0]|(lbuf[1]<<8)|(lbuf[2]<<16)|(lbuf[3]<<24);
+                            for (uint32_t i=0; i<llen; i++) {
+                                uint8_t cbuf[4]; if (fread(cbuf,1,4,f)!=4) break;
+                                uint32_t clen = cbuf[0]|(cbuf[1]<<8)|(cbuf[2]<<16)|(cbuf[3]<<24);
+                                if (clen > 1024) { fseek(f, clen, SEEK_CUR); continue; }
+                                char cmt[1025]; if (fread(cmt, 1, clen, f) == clen) {
+                                    cmt[clen] = '\0';
+                                    if (strncasecmp(cmt, "GENRE=", 6) == 0) {
+                                        strncpy(out_genre, cmt + 6, 31); out_genre[31] = '\0';
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            pos += 4 + length;
+            if (is_last) break;
+        }
+    }
+    fclose(f);
+}
+
 static void sd_card_scan_task(void *arg)
 {
     scan_in_progress = true;
@@ -249,6 +337,25 @@ static void sd_card_scan_task(void *arg)
             if (total_master_tracks < MAX_PLAYLIST_FILES) {
                 master_playlist[total_master_tracks] = strdup(ent->d_name);
                 playlist[total_master_tracks] = master_playlist[total_master_tracks];
+                
+                char temp_genre[32] = {0};
+                char full_path[300];
+                snprintf(full_path, sizeof(full_path), "/sdcard/%s", ent->d_name);
+                get_fast_genre(full_path, temp_genre);
+                
+                uint8_t g_idx = 255;
+                if (temp_genre[0] != '\0') {
+                    for (int g = 0; g < num_genres; g++) {
+                        if (strcasecmp(genre_names[g], temp_genre) == 0) { g_idx = g; break; }
+                    }
+                    if (g_idx == 255 && num_genres < MAX_GENRES) {
+                        strncpy(genre_names[num_genres], temp_genre, 31); genre_names[num_genres][31] = '\0';
+                        g_idx = num_genres;
+                        num_genres++;
+                    }
+                }
+                track_genre_idx[total_master_tracks] = g_idx;
+                
                 total_master_tracks++;
                 total_tracks++;
             }
@@ -273,6 +380,15 @@ static void sd_card_scan_task(void *arg)
         }
     }
     closedir(dir);
+    
+    // Add genres as virtual playlists
+    for (int g = 0; g < num_genres; g++) {
+        if (num_m3u_files < 30) {
+            snprintf(m3u_files[num_m3u_files], 64, "GENRE: %s", genre_names[g]);
+            num_m3u_files++;
+        }
+    }
+
     ESP_LOGI(TAG, "Background scan finished. Total master tracks found: %d, Playlists: %d", total_master_tracks, num_m3u_files);
     scan_in_progress = false;
     vTaskDelete(NULL);
@@ -1803,6 +1919,20 @@ void app_music_handle_input(button_event_t event)
                     total_tracks = total_master_tracks;
                     for (int i = 0; i < total_tracks; i++) {
                         playlist[i] = master_playlist[i];
+                    }
+                } else if (strncmp(m3u_files[current_playlist_idx], "GENRE: ", 7) == 0) {
+                    char *target_genre = m3u_files[current_playlist_idx] + 7;
+                    int g_idx = -1;
+                    for (int g = 0; g < num_genres; g++) {
+                        if (strcmp(genre_names[g], target_genre) == 0) { g_idx = g; break; }
+                    }
+                    total_tracks = 0;
+                    if (g_idx != -1) {
+                        for (int i = 0; i < total_master_tracks; i++) {
+                            if (track_genre_idx[i] == g_idx) {
+                                playlist[total_tracks++] = master_playlist[i];
+                            }
+                        }
                     }
                 } else {
                     char path[128];
