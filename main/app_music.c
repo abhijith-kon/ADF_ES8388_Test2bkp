@@ -139,7 +139,7 @@ static char info_title_str[128] = "";
 static int flac_bitrate = 0;
 static bool is_sleep_mode = false;
 static char sleep_track_path[300] = "";
-static int64_t saved_byte_pos = 0;
+
 static bool is_shuffle = false;
 static bool show_thumbnail = false;
 static uint32_t current_apic_offset = 0;
@@ -441,7 +441,7 @@ static void ensure_cursor_visible(void)
 // ---- Progress ----
 static float get_playback_progress(void)
 {
-    if (!is_playing || !fatfs_stream_reader || current_track_bytes == 0) return 0.0f;
+    if (!fatfs_stream_reader || current_track_bytes == 0) return 0.0f;
     audio_element_info_t info = {0};
     audio_element_getinfo(fatfs_stream_reader, &info);
     if (info.byte_pos <= 0) return 0.0f;
@@ -1574,35 +1574,19 @@ void app_music_play_sleep_ambience(const char *filename)
 static void pause_current_track(void)
 {
     if (!is_playing) return;
-    audio_element_info_t info = {0};
-    audio_element_getinfo(fatfs_stream_reader, &info);
-    saved_byte_pos = info.byte_pos;
-    audio_pipeline_stop(pipeline);
-    audio_pipeline_wait_for_stop(pipeline);
+    audio_pipeline_pause(pipeline);
     is_playing = false;
     player_dirty = true;
-    ESP_LOGI(TAG, "Paused track at byte_pos = %lld", (long long)saved_byte_pos);
+    ESP_LOGI(TAG, "Paused track via audio_pipeline_pause");
 }
 
 static void resume_current_track(void)
 {
     if (is_playing || !pipeline_has_run) return;
-    if (fft_ringbuf) rb_reset(fft_ringbuf);
-    audio_pipeline_stop(pipeline);
-    audio_pipeline_wait_for_stop(pipeline);
-    audio_pipeline_terminate(pipeline);
-    audio_pipeline_reset_ringbuffer(pipeline);
-    audio_pipeline_reset_elements(pipeline);
-
-    char path[256];
-    snprintf(path, sizeof(path), "/sdcard/%s", playlist[current_track]);
-    audio_element_set_uri(fatfs_stream_reader, path);
-    audio_element_set_byte_pos(fatfs_stream_reader, (int)saved_byte_pos);
-
-    audio_pipeline_run(pipeline);
+    audio_pipeline_resume(pipeline);
     is_playing = true;
     player_dirty = true;
-    ESP_LOGI(TAG, "Resumed track from byte_pos = %lld", (long long)saved_byte_pos);
+    ESP_LOGI(TAG, "Resumed track via audio_pipeline_resume");
 }
 
 static int get_next_track_idx(void)
