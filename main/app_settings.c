@@ -53,11 +53,6 @@ static void neo_init() {
 static void neo_update() {
     if (!neo_initialized) return;
     
-    // TEMPORARY: Force pure green at max brightness to test hardware
-    led_strip_set_pixel(led_strip, 0, 0, 255, 0);
-    led_strip_refresh(led_strip);
-    return;
-    
     if (!neo_on) {
         led_strip_clear(led_strip);
         return;
