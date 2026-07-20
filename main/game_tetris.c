@@ -27,6 +27,7 @@ static int score = 0;
 static int total_lines = 0;
 static int level = 1;
 static bool game_over = false;
+static bool game_paused = false;
 static int64_t last_drop_time = 0;
 
 static int bag[7];
@@ -252,6 +253,7 @@ void game_tetris_start(void) {
     total_lines = 0;
     level = 1;
     game_over = false;
+    game_paused = false;
     fill_bag();
     next_shape = pull_from_bag();
     
@@ -273,7 +275,10 @@ void game_tetris_start(void) {
 }
 
 void game_tetris_tick(void) {
-    if (game_over) return;
+    if (game_over || game_paused) {
+        last_drop_time = esp_timer_get_time();
+        return;
+    }
     int64_t now = esp_timer_get_time();
     int64_t speed_us = 350000 - ((level - 1) * 45000);
     if (speed_us < 80000) speed_us = 80000;
@@ -293,11 +298,20 @@ void game_tetris_tick(void) {
 }
 
 bool game_tetris_input(button_event_t event) {
-    if (event == BTN_ESCAPE || event == BTN_B) {
+    if (event == BTN_ESCAPE) {
         return true; // Exit to games menu
     }
-    if (game_over) {
-        if (event == BTN_ENTER) game_tetris_start();
+    if (event == BTN_B) {
+        game_paused = !game_paused;
+        if (game_paused) {
+            rg_gui_draw_text_box(154, 284, 80, 30, RG_COLOR_RGB(200, 100, 20), "PAUSED");
+        } else {
+            rg_gui_draw_text_box(154, 284, 80, 30, SIDEBAR_BG, ""); // clear
+        }
+        return false;
+    }
+    if (game_over || game_paused) {
+        if (game_over && event == BTN_ENTER) game_tetris_start();
         return false;
     }
     bool moved = false;

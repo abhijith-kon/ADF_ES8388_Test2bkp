@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 
 # Set ADF_PATH explicitly for the build system
-set(ENV{ADF_PATH} "C:/Users/Dell/esp/esp-adf")
+set(ENV{ADF_PATH} "C:/esp/esp-adf")
 
 # Global definitions to fix ADF component build errors
 add_definitions(-DBOARD_PA_GAIN=10)

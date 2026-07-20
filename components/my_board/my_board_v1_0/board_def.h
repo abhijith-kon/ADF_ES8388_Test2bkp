@@ -57,10 +57,21 @@ typedef struct {
     int data_in_num;    /*!< DATA_IN gpio number */
 } board_i2s_pin_t;
 
+#include "driver/i2c.h"
+#include "driver/spi_master.h"
+
 // Declaration only
 int8_t get_sdcard_intr_gpio(void);
+int8_t get_sdcard_open_file_num_max(void);
+int8_t get_pa_enable_gpio(void);
+esp_err_t get_i2c_pins(i2c_port_t port, i2c_config_t *i2c_config);
+esp_err_t get_i2s_pins(int port, board_i2s_pin_t *i2s_config);
+esp_err_t get_spi_pins(spi_bus_config_t *spi_config, spi_device_interface_config_t *spi_device_interface_config);
+int8_t get_input_set_id(void);
+int8_t get_input_play_id(void);
+int8_t get_input_mute_id(void);
 
-extern audio_hal_func_t AUDIO_NEW_CODEC_DEFAULT_HANDLE;
+extern audio_hal_func_t AUDIO_CODEC_ES8388_DEFAULT_HANDLE;
 
 #define AUDIO_CODEC_DEFAULT_CONFIG(){                   \
         .adc_input  = AUDIO_HAL_ADC_INPUT_LINE1,        \

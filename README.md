@@ -55,11 +55,13 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **Sci-Fi System Diagnostic UI:** Completely redesigned the System Status view into an amber-and-black industrial diagnostic terminal featuring live Core Temperature, Uptime, Memory blocks, and Storage stats.
 - **WAP Upload Routing:** The Web UI now features a dropdown menu to dynamically route uploaded files to the `/sdcard/` Root folder (for music/txt) or the `/sdcard/OTA/` folder (for firmware binaries).
 - **Smoother Pong:** Added rotary encoder support to the Pong game and smoothed out the paddle movement increments.
-### Version 25 (Latest)
-- **RTC Hardware Sync Order Fix**: Resolved a critical I2C bus contention issue where the audio driver's repeated ES8388 I2C timeouts caused the DS3231 RTC initialization to fail with `err=259`. By moving the RTC sync sequence *before* the audio board initialization in the boot sequence, the DS3231 now reliably syncs the system time immediately on power-up.
-- **I2C Diagnostics & Muting**: Discovered that generic ES8388 breakout boards without proper chip enable (CE) logic silently ignore I2C initialization commands (NACKs), causing the hardware mixer and new hardware muting commands to fail. Playback continues via I2S, but the lack of I2C control results in audible pops during track transitions.
+### Version 26 (Latest)
+- **Retro-Go Hardware Acceleration**: The ILI9341 display SPI bus frequency has been aggressively increased from 16MHz to 40MHz within the Retro-Go OS (`config.h`), tripling the available DMA bandwidth. This permanently eliminates screen tearing, frame drops, and audio stuttering during high-speed full-screen redrawing (e.g., character movement in Pokémon).
+- **Dual-OS Memory Synchronization**: The external PSRAM speed in Retro-Go has been synchronized to 40MHz to match the Console OS, resolving hardware initialization mismatches that previously caused `LoadProhibited` and `Guru Meditation` panics during emulator boot.
+- **SD Card Driver Restore**: Re-enabled FATFS Long File Name (`FATFS_LFN_HEAP`) and UTF-8 support in the custom `rg_tool.py` Retro-Go build process. Game titles are no longer truncated to 8.3 short names, and UI images load flawlessly.
+- **Pause Feature in Mini-Games**: The `BTN_B` button has been dynamically mapped to pause gameplay in the Console OS mini-games (`Tetris`, `2048`, and `Pong`), ensuring state retention during interruptions.
 
-### Version 24
+### Version 25
 
 ### Version 23 Updates
 - **FLAC Support Enhancements**: Added robust native FLAC metadata parsing (`STREAMINFO`, `VORBIS_COMMENT`, `PICTURE`). FLAC files now accurately display Title, Artist, Album, Genre, and Album Art (Baseline JPEG/PNG) natively, alongside a dynamically calculated accurate average bitrate.

@@ -46,6 +46,7 @@ static uint8_t bricks[BRICK_ROWS][BRICK_COLS];
 static int score = 0;
 static int lives = 3;
 static bool game_over = false;
+static bool game_paused = false;
 static bool ball_launched = false;
 static int64_t last_frame_time = 0;
 
@@ -134,6 +135,7 @@ void game_pong_start(void) {
     score = 0;
     lives = 3;
     game_over = false;
+    game_paused = false;
     
     rg_gui_clear(BG_COLOR);
     init_level();
@@ -143,7 +145,10 @@ void game_pong_start(void) {
 }
 
 void game_pong_tick(void) {
-    if (game_over) return;
+    if (game_over || game_paused) {
+        last_frame_time = esp_timer_get_time();
+        return;
+    }
     int64_t now = esp_timer_get_time();
     if (now - last_frame_time < 16666) return; // ~60 FPS
     last_frame_time = now;
@@ -222,11 +227,22 @@ void game_pong_tick(void) {
 }
 
 bool game_pong_input(button_event_t event) {
-    if (event == BTN_ESCAPE || event == BTN_B) {
+    if (event == BTN_ESCAPE) {
         return true; // Exit to menu
     }
-    if (game_over) {
-        if (event == BTN_ENTER) game_pong_start();
+    if (event == BTN_B) {
+        game_paused = !game_paused;
+        if (game_paused) {
+            rg_gui_set_font_size(16);
+            rg_gui_draw_text_box(80, 150, 80, 40, RG_COLOR_RGB(255, 109, 0), "PAUSED");
+            rg_gui_set_font_size(8);
+        } else {
+            render_game();
+        }
+        return false;
+    }
+    if (game_over || game_paused) {
+        if (game_over && event == BTN_ENTER) game_pong_start();
         return false;
     }
     if (!ball_launched && (event == BTN_ENTER || event == BTN_A || event == BTN_UP)) {

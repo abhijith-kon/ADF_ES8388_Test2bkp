@@ -21,6 +21,7 @@ static uint16_t board[4][4];
 static int score = 0;
 static int best_score = 0;
 static bool game_over = false;
+static bool game_paused = false;
 
 static uint16_t get_tile_color(uint16_t val) {
     switch (val) {
@@ -239,6 +240,7 @@ void game_2048_start(void) {
     memset(board, 0, sizeof(board));
     score = 0;
     game_over = false;
+    game_paused = false;
     
     rg_gui_clear(BG_COLOR);
     
@@ -263,11 +265,22 @@ void game_2048_tick(void) {
 }
 
 bool game_2048_input(button_event_t event) {
-    if (event == BTN_ESCAPE || event == BTN_B) {
+    if (event == BTN_ESCAPE) {
         return true; // Exit to menu
     }
-    if (game_over) {
-        if (event == BTN_ENTER) game_2048_start();
+    if (event == BTN_B) {
+        game_paused = !game_paused;
+        if (game_paused) {
+            rg_gui_set_font_size(16);
+            rg_gui_draw_text_box(80, 140, 80, 40, RG_COLOR_RGB(246, 124, 95), "PAUSED");
+            rg_gui_set_font_size(8);
+        } else {
+            render_grid();
+        }
+        return false;
+    }
+    if (game_over || game_paused) {
+        if (game_over && event == BTN_ENTER) game_2048_start();
         return false;
     }
     
