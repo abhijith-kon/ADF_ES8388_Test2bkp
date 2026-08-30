@@ -281,41 +281,45 @@ static void sd_card_scan_task(void *arg)
 
 static int decoder_write_cb(audio_element_handle_t el, char *buffer, int len, TickType_t ticks_to_wait, void *ctx)
 {
+    int orig_len = len;
+    int processed_len = len;
     // === DSP PROCESSING ===
     if (len > 0) {
         audio_element_info_t info = {0};
         audio_element_getinfo(el, &info);
         int sr = info.sample_rates > 0 ? info.sample_rates : 44100;
         int ch = info.channels > 0 ? info.channels : 2;
-        len = dsp_process_pcm((unsigned char *)buffer, len, sr, ch);
+        processed_len = dsp_process_pcm((unsigned char *)buffer, len, sr, ch);
     }
 
     static int cnt = 0;
     if (++cnt % 100 == 0) {
-        ESP_LOGI(TAG, "decoder callback %d bytes", len);
+        ESP_LOGI(TAG, "decoder callback %d bytes (processed: %d)", orig_len, processed_len);
     }
-    if (in_player_ui && !show_thumbnail && fft_ringbuf && len > 0) {
+    if (in_player_ui && !show_thumbnail && fft_ringbuf && processed_len > 0) {
         int avail_fill = rb_bytes_filled(fft_ringbuf);
-        if (avail_fill + len > 4000) {
+        if (avail_fill + processed_len > 4000) {
             char dummy[512];
-            while (rb_bytes_filled(fft_ringbuf) + len > 4000) {
+            while (rb_bytes_filled(fft_ringbuf) + processed_len > 4000) {
                 if (rb_read(fft_ringbuf, dummy, sizeof(dummy), 0) <= 0) break;
             }
         }
-        rb_write(fft_ringbuf, buffer, len, 0);
+        rb_write(fft_ringbuf, buffer, processed_len, 0);
     }
     
-    if (len > 0) {
+    if (processed_len > 0) {
         audio_element_info_t info = {0};
         audio_element_getinfo(el, &info);
         int ch = info.channels > 0 ? info.channels : 2;
-        apply_software_volume((unsigned char *)buffer, len, ch);
+        apply_software_volume((unsigned char *)buffer, processed_len, ch);
     }
     ringbuf_handle_t out_rb = (ringbuf_handle_t)ctx;
     if (out_rb) {
-        return rb_write(out_rb, buffer, len, ticks_to_wait);
+        int ret = rb_write(out_rb, buffer, processed_len, ticks_to_wait);
+        if (ret < 0) return ret; // Pass through aborts/timeouts
+        return orig_len; // Tell decoder we consumed all original bytes
     }
-    return len;
+    return orig_len;
 }
 
 // ---- Audio Pipeline Init ----
@@ -349,6 +353,7 @@ static void init_audio_pipeline(void)
         DEFAULT_ESP_M4A_DECODER_CONFIG(),
     };
     esp_decoder_cfg_t auto_dec_cfg = DEFAULT_ESP_DECODER_CONFIG();
+    auto_dec_cfg.out_rb_size = 32 * 1024; // FLAC frames can exceed 16KB; 8KB default is too small!
     mp3_decoder = esp_decoder_init(&auto_dec_cfg, auto_decode, sizeof(auto_decode) / sizeof(auto_decode[0]));
 
     audio_pipeline_register(pipeline, fatfs_stream_reader, "file");

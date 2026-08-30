@@ -55,7 +55,10 @@ Buttons are active LOW (0 = pressed). Bit order is MSB-first from Q7 output.
 - **Sci-Fi System Diagnostic UI:** Completely redesigned the System Status view into an amber-and-black industrial diagnostic terminal featuring live Core Temperature, Uptime, Memory blocks, and Storage stats.
 - **WAP Upload Routing:** The Web UI now features a dropdown menu to dynamically route uploaded files to the `/sdcard/` Root folder (for music/txt) or the `/sdcard/OTA/` folder (for firmware binaries).
 - **Smoother Pong:** Added rotary encoder support to the Pong game and smoothed out the paddle movement increments.
-### Version 26 (Latest)
+### Version 27 (Latest)
+- **FLAC Ringbuffer & Audio Drop Fix**: Resolved a critical memory-sizing bug in ESP-ADF where high-resolution FLAC files (which uncompress to >16KB chunks) overflowed the default 8KB `esp_decoder` ringbuffer, causing immediate playback aborts (`FLAC__STREAM_DECODER_ABORTED`). Fixed by forcefully expanding the decoder output buffer to 32KB. Additionally fortified the custom `decoder_write_cb` to safely handle dynamic length mutations when using the Audio DSP speed control, preventing short-write abort errors during playback.
+
+### Version 26
 - **ESP-ADF Audio PSRAM Patch**: Re-applied the critical `idf_v5.3_freertos.patch` to the ESP-IDF kernel. This allows the MP3/FLAC audio decoders to successfully use `xTaskCreateRestrictedPinnedToCore` to allocate their heavy processing buffers in the external 8MB PSRAM, resolving a fatal `audio_thread_create failed` runtime crash when playing music from the SD card.
 - **Retro-Go Hardware Acceleration**: The ILI9341 display SPI bus frequency has been aggressively increased from 16MHz to 40MHz within the Retro-Go OS (`config.h`), tripling the available DMA bandwidth. This permanently eliminates screen tearing, frame drops, and audio stuttering during high-speed full-screen redrawing (e.g., character movement in Pokémon).
 - **Dual-OS Memory Synchronization**: The external PSRAM speed in Retro-Go has been synchronized to 40MHz to match the Console OS, resolving hardware initialization mismatches that previously caused `LoadProhibited` and `Guru Meditation` panics during emulator boot.
